@@ -1,0 +1,81 @@
+:root {
+  /* ───────── Niveau 1 · Palette de référence (valeurs brutes, jamais utilisées directement) ───────── */
+  --gray-0: #ffffff;
+  --gray-25: #fbfbfa;
+  --gray-50: #f4f5f4;
+  --gray-100: #eceeed;
+  --gray-200: #dfe2e0;
+  --gray-300: #c4c9c6;
+  --gray-500: #686f75;
+  --gray-700: #3a4147;
+  --gray-900: #12161a;
+
+  --green-50: #e6f1ec;
+  --green-700: #0e5a41;
+  --green-800: #0a4733;
+  --mint-50: #e3f7ef;
+  --mint-700: #0b7a52;
+  --rose-50: #fde8ec;
+  --rose-600: #c4263f;
+  --amber-50: #fff3d9;
+  --amber-500: #e09a05;
+  --amber-700: #8f5700;
+  --blue-600: #1a5fd0;
+
+  /* ───────── Niveau 2 · Sémantique (ce que les couleurs veulent dire) ───────── */
+  --paper: var(--gray-50); /* fond de l'application */
+  --surface: var(--gray-0); /* cartes, panneaux */
+  --surface-2: var(--gray-25); /* lignes survolées, en-têtes de tableau */
+  --ink: var(--gray-900); /* texte principal */
+  --ink-2: var(--gray-700); /* texte secondaire */
+  --ink-3: var(--gray-500); /* texte discret, légendes */
+  --line: var(--gray-200); /* bordures */
+  --line-2: var(--gray-100); /* filets internes */
+
+  --brand: var(--green-700); /* action principale */
+  --brand-hover: var(--green-800);
+  --brand-soft: var(--green-50);
+
+  --danger: var(--rose-600); /* prix sous la référence, retard de relance */
+  --danger-soft: var(--rose-50);
+  --warn: var(--amber-700); /* à valider, à contacter */
+  --warn-soft: var(--amber-50);
+  --warn-dot: var(--amber-500);
+  --ok: var(--mint-700); /* conforme, corrigé */
+  --ok-soft: var(--mint-50);
+  --focus: var(--blue-600);
+
+  /* Typographie */
+  --font: 'Schibsted Grotesk Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-md: 0.875rem;
+  --fs-lg: 1rem;
+  --fs-xl: 1.25rem;
+  --fs-2xl: 1.6rem;
+  --fs-kpi: 2rem;
+
+  /* Espacements (base 4 px) */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+
+  /* Rayons */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+
+  /* ───────── Niveau 3 · Composants ───────── */
+  --card-radius: var(--r-xl);
+  --card-shadow: 0 1px 2px rgba(18, 22, 26, 0.04), 0 10px 28px rgba(18, 22, 26, 0.06);
+  --shadow-pop: 0 18px 48px rgba(18, 22, 26, 0.18);
+  --side-w: 248px;
+  --page-pad: 32px;
+}

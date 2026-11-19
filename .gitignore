@@ -1,0 +1,24 @@
+# Secrets et configuration locale
+.env
+.env.*.local
+api/.env
+.dev.vars
+!.env.example
+
+# Dépendances et sorties de build
+node_modules/
+dist/
+*.tsbuildinfo
+.wrangler/
+.wrangler-out/
+
+# Données métier confidentielles (fichiers Excel des équipes) : à importer depuis l'application, jamais versionnés
+*.xlsx
+*.xlsm
+*.csv
+
+# Prototype de référence (dépôt séparé) et outils locaux
+price-monitoring-claude-busy-cray-ktk4e1/
+.claude/
+!app/.env
+!app/.env.demo

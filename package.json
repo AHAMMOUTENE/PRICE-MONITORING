@@ -1,0 +1,10 @@
+{
+  "name": "price-monitoring",
+  "private": true,
+  "scripts": {
+    "dev": "node dev.mjs",
+    "build": "npm --prefix app run build",
+    "start": "npm --prefix api start",
+    "test": "npm --prefix api test"
+  }
+}

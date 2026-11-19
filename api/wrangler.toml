@@ -1,0 +1,32 @@
+# Déploiement Cloudflare : un seul Worker sert le site (app/dist) et l'API (/api/*), et lance les scans chaque minute.
+#   1. cd ../app && npx vite build --mode server
+#   2. npx wrangler hyperdrive create price-monitoring --connection-string="<DATABASE_URL Supabase>"   (colle l'id ci-dessous)
+#   3. npx wrangler secret put SCRAPINGBEE_API_KEY   (idem ANTHROPIC_API_KEY si utilisée)
+#   4. npx wrangler deploy
+name = "price-monitoring"
+main = "src/worker.ts"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Un scan parcourt des dizaines de pages : plan Workers payant (limites de durée et de requêtes plus larges).
+[limits]
+cpu_ms = 300000
+
+[assets]
+directory = "../app/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/health"]
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REMPLACER_PAR_LID_HYPERDRIVE"
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+DEFAULT_ZONE_ROLE = "editor"
+SCAN_CONCURRENCY = "4"
+# ADMIN_EMAILS = "prenom.nom@veja.fr"
+# Protégez le domaine avec Cloudflare Access : l'adresse du SSO arrive dans l'en-tête Cf-Access-Authenticated-User-Email.

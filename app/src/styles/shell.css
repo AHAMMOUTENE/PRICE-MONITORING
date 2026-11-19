@@ -1,0 +1,457 @@
+.app {
+  display: grid;
+  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* Barre latérale ------------------------------------------------------ */
+.side {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s4) var(--s4) var(--s3);
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.side > * {
+  flex: none;
+  min-width: 0;
+}
+.side-nav {
+  flex: 1 1 auto;
+}
+
+.side-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+.side-toggle {
+  flex: none;
+  color: var(--ink-3);
+}
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start; /* le logo ne s'étire pas sur la largeur du texte */
+  gap: 6px;
+  padding: 0 var(--s3);
+  text-decoration: none;
+  line-height: 1;
+  min-width: 0;
+}
+.brand-logo {
+  display: block;
+  height: 22px;
+  width: auto;
+  max-width: 100%;
+  flex: none;
+  object-fit: contain;
+}
+.brand span {
+  font-weight: 500;
+  font-size: var(--fs-sm);
+  letter-spacing: 0;
+  color: var(--ink-3);
+}
+
+/* Listes déroulantes de la barre (zone, langue) : même largeur et même marge que les liens du menu */
+.side-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.side-block .side-title {
+  margin-top: var(--s2);
+}
+.side-select {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--ink);
+}
+.side-select:hover {
+  border-color: var(--ink-3);
+}
+.side-select:focus-within {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+.side-select select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0 34px 0 var(--s3); /* le texte commence où commencent les icônes des liens */
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  color: inherit;
+  cursor: pointer;
+  outline: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.side-select.has-icon select {
+  padding-left: 38px;
+}
+.side-select-icon,
+.side-select-chev {
+  position: absolute;
+  pointer-events: none;
+  color: var(--ink-3);
+}
+.side-select-icon {
+  left: 11px;
+  width: 18px;
+  height: 18px;
+}
+.side-select-chev {
+  right: 10px;
+  width: 16px;
+  height: 16px;
+}
+
+.side-nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+.side-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.side-title {
+  margin: var(--s4) var(--s3) var(--s1);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  color: var(--ink-3);
+  letter-spacing: 0.02em;
+}
+
+.side-link {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 9px var(--s3);
+  border-radius: var(--r-md);
+  text-decoration: none;
+  color: var(--ink-2);
+  font-weight: 600;
+  font-size: var(--fs-md);
+}
+.side-link > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.side-link .icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--ink-3);
+}
+.side-link:hover {
+  background: var(--paper);
+  color: var(--ink);
+}
+.side-link[aria-current='page'] {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.side-link[aria-current='page'] .icon {
+  color: var(--brand);
+}
+.side-badge {
+  margin-left: auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  background: var(--danger);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.side-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line-2);
+}
+.demo-flag {
+  padding: 0 var(--s3);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
+.side-scrim {
+  display: none;
+}
+
+/* Contenu ------------------------------------------------------------- */
+.content {
+  min-width: 0;
+}
+.mobilebar {
+  display: none;
+}
+
+.page {
+  padding: var(--s5) var(--page-pad) var(--s8);
+}
+
+.page-head {
+  margin-bottom: var(--s5);
+}
+.page-head-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  flex-wrap: wrap;
+}
+.page-head-title {
+  flex: 1;
+  min-width: 0;
+}
+.page-head h1 {
+  font-size: var(--fs-2xl);
+  letter-spacing: -0.015em;
+}
+.page-head-title p {
+  margin-top: 2px;
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+}
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 var(--s3) -6px;
+  padding: 4px 10px 4px 4px;
+  border-radius: var(--r-md);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+.back:hover {
+  background: var(--line-2);
+  color: var(--ink);
+}
+
+/* Grilles ------------------------------------------------------------- */
+.grid-kpi {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s4);
+  margin-bottom: var(--s4);
+}
+.grid-12 {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--s4);
+  align-items: start;
+}
+.span-4 { grid-column: span 4; }
+.span-5 { grid-column: span 5; }
+.span-6 { grid-column: span 6; }
+.span-7 { grid-column: span 7; }
+.span-8 { grid-column: span 8; }
+.span-12 { grid-column: span 12; }
+
+/* Écrans moyens et petits --------------------------------------------- */
+@media (max-width: 1200px) {
+  .grid-kpi {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .span-4, .span-5, .span-6, .span-7, .span-8 {
+    grid-column: span 12;
+  }
+}
+
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+  .side {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(300px, 86vw);
+    z-index: 30;
+    transform: translateX(-100%);
+    transition: transform 180ms ease-out;
+    box-shadow: var(--shadow-pop);
+  }
+  .side.is-open {
+    transform: none;
+  }
+  .side-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(18, 22, 26, 0.4);
+    z-index: 25;
+  }
+  .mobilebar {
+    display: flex;
+    align-items: center;
+    gap: var(--s3);
+    height: 52px;
+    padding: 0 var(--s4);
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  .mobilebar .brand {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--s2);
+    padding: 0;
+  }
+  .mobilebar .brand-logo {
+    height: 18px;
+  }
+  .page {
+    padding: var(--s4) var(--s4) var(--s7);
+  }
+}
+
+@media (max-width: 560px) {
+  .grid-kpi {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Menu réduit (grand écran) : une colonne d'icônes ---------------------- */
+.side-mini {
+  all: unset;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  height: 36px;
+  padding: 0;
+  margin-inline: -4px; /* un peu plus large que la colonne d'icônes : « LATAM » doit tenir en entier */
+  white-space: nowrap;
+  border-radius: var(--r-md);
+  background: var(--paper);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.side-mini:hover {
+  background: var(--line-2);
+  color: var(--ink);
+}
+.side-mini:focus-visible {
+  outline: 3px solid var(--focus);
+}
+
+@media (min-width: 901px) {
+  .app {
+    transition: grid-template-columns 180ms ease-out;
+  }
+  .app.is-collapsed {
+    --side-w: 72px;
+  }
+  .side.is-collapsed {
+    padding-left: var(--s3);
+    padding-right: var(--s3);
+  }
+  .side.is-collapsed .side-top {
+    justify-content: center;
+  }
+  .side.is-collapsed .brand,
+  .side.is-collapsed .side-block,
+  .side.is-collapsed .side-title,
+  .side.is-collapsed .side-link > span:not(.side-badge),
+  .side.is-collapsed .side-user-text,
+  .side.is-collapsed .demo-flag {
+    display: none;
+  }
+  .side.is-collapsed .side-link {
+    position: relative;
+    justify-content: center;
+    padding: 10px 0;
+  }
+  .side.is-collapsed .side-badge {
+    position: absolute;
+    top: 2px;
+    right: 4px;
+    margin: 0;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    font-size: 10px;
+  }
+  .side.is-collapsed .side-title + .side-group {
+    margin-top: var(--s2);
+    padding-top: var(--s2);
+    border-top: 1px solid var(--line-2);
+  }
+  .side.is-collapsed .side-user {
+    justify-content: center;
+    padding: 6px 0;
+  }
+}
+
+/* Les logs techniques, poussés en bas du menu */
+.side-bottom {
+  margin-top: auto;
+  padding-top: var(--s3);
+}
+
+/* Familles de pages : « Comptes » et « Produits » se déplient en sous-pages */
+.side-fam { display: flex; flex-direction: column; gap: 2px; }
+.side-link.is-group[aria-current='page'] { background: transparent; color: var(--ink); }
+.side-link.is-group[aria-current='page'] .icon:not(.side-chev) { color: var(--brand); }
+.side-chev { margin-left: auto; width: 14px !important; height: 14px !important; transition: transform 150ms; }
+.side-chev.is-open { transform: rotate(180deg); }
+.side-children { display: flex; flex-direction: column; gap: 1px; margin-bottom: 4px; }
+.side-sublink {
+  display: block;
+  padding: 7px var(--s3) 7px 42px; /* le texte s'aligne sous le libellé de la famille */
+  border-radius: var(--r-md);
+  text-decoration: none;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.side-sublink:hover { background: var(--paper); color: var(--ink); }
+.side-sublink[aria-current='page'] { background: var(--brand-soft); color: var(--brand); font-weight: 700; }
+@media (min-width: 901px) {
+  .side.is-collapsed .side-children, .side.is-collapsed .side-chev { display: none; }
+  .side.is-collapsed .side-link.is-group[aria-current='page'] { background: var(--brand-soft); color: var(--brand); }
+}
