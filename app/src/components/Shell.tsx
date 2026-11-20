@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { api } from '../api'
 import { useQuery, useZone } from '../lib/app'
+import { API_URL } from '../lib/config'
 import type { Locale } from '../lib/format'
 import { LANGUAGES, useT } from '../lib/i18n'
 import { useRoute } from '../lib/router'
@@ -137,7 +138,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const logout = async () => {
     if (import.meta.env.DEV) {
       // SSO simulé : on ferme la session locale, puis la page de connexion s'affiche.
-      await makeRequest(import.meta.env.VITE_API_URL || '/api')('POST', '/auth/logout').catch(() => undefined)
+      await makeRequest(API_URL || '/api')('POST', '/auth/logout').catch(() => undefined)
       window.location.reload()
     } else window.location.assign(import.meta.env.VITE_LOGOUT_URL || '/cdn-cgi/access/logout')
   }

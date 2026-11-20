@@ -20,5 +20,3 @@ dist/
 # Prototype de référence (dépôt séparé) et outils locaux
 price-monitoring-claude-busy-cray-ktk4e1/
 .claude/
-!app/.env
-!app/.env.demo

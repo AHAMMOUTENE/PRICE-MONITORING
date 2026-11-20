@@ -5,6 +5,7 @@ import { ExportMenu } from '../components/ExportMenu'
 import { SeeMore } from '../components/SeeMore'
 import { AccountLogo, Card, CommentCell, DiscountPill, Empty, ErrorBlock, KpiCard, LoadingBlock, PageHeader, ProductImage } from '../components/ui'
 import { LastScan } from '../components/ScanButton'
+import { API_URL } from '../lib/config'
 import { SeasonFilter } from '../components/SeasonFilter'
 import { WeekPicker } from '../components/WeekPicker'
 import { refresh, useQuery, useZone } from '../lib/app'
@@ -62,7 +63,7 @@ export function Dashboard() {
     <div className="page">
       <PageHeader
         title={t('dash.title')}
-        subtitle={import.meta.env.VITE_API_URL ? undefined : t('app.demo')}
+        subtitle={API_URL ? undefined : t('app.demo')}
         actions={
           <>
             <LastScan lastScan={o.lastScan} />

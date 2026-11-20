@@ -8,8 +8,8 @@
     "start": "tsx src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx test/e2e.mts",
-    "deploy": "wrangler deploy",
-    "deploy:check": "wrangler deploy --dry-run --outdir .wrangler-out"
+    "deploy": "npx --yes wrangler@4 deploy",
+    "deploy:check": "npx --yes wrangler@4 deploy --dry-run --outdir .wrangler-out"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

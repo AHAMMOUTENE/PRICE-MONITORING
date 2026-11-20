@@ -41,6 +41,7 @@ import { ACCOUNT_COLUMNS, CATALOG_COLUMNS, mapColumns, parseAmount, prettyColor,
 import { ZONES, zoneInfo } from '../lib/zones'
 import { CATALOG, DEFAULT_RULES, OBSERVATIONS, RETAILERS, SALE_PERIODS, SEASON, WEEKS, addDays } from './mock-data'
 import { createHttpApi, makeRequest } from './http'
+import { API_URL } from '../lib/config'
 import { getSeason } from '../lib/season'
 import { discountAt, discountLimit, reasonAt, toAnomaly } from './rules'
 import { countScanDays, isScanDay, isoWeekday } from './schedule'
@@ -1161,7 +1162,7 @@ export const mockApi: Api = {
 }
 
 /* ---------------------------------------------------------------------- */
-/* Mode serveur : VITE_API_URL (par exemple « /api »). Sans elle, la démonstration locale. */
+/* Mode serveur : l'API est sur « /api » (voir lib/config.ts) ; `npm run dev:demo` lance la démonstration locale. */
 /* ---------------------------------------------------------------------- */
 
 interface RemoteState {
@@ -1215,7 +1216,6 @@ function resetDemoData(): void {
   decisions.clear()
 }
 
-const API_URL = import.meta.env.VITE_API_URL
 
 /** Mode serveur : relit les quatre zones avant d'afficher l'application. Sans effet en démonstration. */
 export async function bootRemote(): Promise<void> {

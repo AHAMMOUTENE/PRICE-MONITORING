@@ -28,5 +28,7 @@ crons = ["* * * * *"]
 [vars]
 DEFAULT_ZONE_ROLE = "editor"
 SCAN_CONCURRENCY = "4"
-# ADMIN_EMAILS = "prenom.nom@veja.fr"
+# ADMIN_EMAILS = "admin@example.com"   (adresses des administrateurs, séparées par des virgules)
+# APP_URL = "https://votre-domaine"      (liens des e-mails de récapitulatif)
+# MAIL_FROM = "suivi@votre-domaine"      (expéditeur autorisé chez Resend ; la clé RESEND_API_KEY se met en secret)
 # Protégez le domaine avec Cloudflare Access : l'adresse du SSO arrive dans l'en-tête Cf-Access-Authenticated-User-Email.

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { API_URL } from '../lib/config'
 import { useT } from '../lib/i18n'
 import { makeRequest } from '../api/http'
 
@@ -21,7 +22,7 @@ export function LoginPage({ kind }: { kind: 'auth' | 'server' }) {
     setBusy(true)
     setError(false)
     try {
-      await makeRequest(import.meta.env.VITE_API_URL || '/api')('POST', '/auth/login', { email })
+      await makeRequest(API_URL || '/api')('POST', '/auth/login', { email })
       window.location.reload()
     } catch {
       setError(true)

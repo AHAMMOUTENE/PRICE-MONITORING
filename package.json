@@ -5,6 +5,7 @@
     "dev": "node dev.mjs",
     "build": "npm --prefix app run build",
     "start": "npm --prefix api start",
+    "deploy": "npm run build && npm --prefix api run deploy",
     "test": "npm --prefix api test"
   }
 }

@@ -12,7 +12,7 @@ npm run build       # types + build de production (dist/)
 npm run typecheck
 ```
 
-Le mode se règle par `VITE_API_URL` : `/api` (fichier `.env`, par défaut) ou vide (`.env.demo`). En développement, Vite relaie `/api` vers l'API locale (`127.0.0.1:8787`).
+Par défaut, le site parle à l'API sur `/api` (voir `src/lib/config.ts`) : aucun fichier de configuration n'est nécessaire pour le construire. `npm run dev:demo` lance l'interface avec des données fictives. `VITE_API_URL`, si elle est fournie à la construction, remplace l'adresse par défaut. En développement, Vite relaie `/api` vers l'API locale (`127.0.0.1:8787`).
 
 ## Navigation
 
