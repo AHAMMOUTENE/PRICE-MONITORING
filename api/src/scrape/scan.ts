@@ -8,15 +8,19 @@
 import type { Db, Sql } from '../db.ts'
 import { HttpError, addDays, isoWeekday, mondayOf, pool, zoneNow } from '../util.ts'
 import { evaluate } from './evaluate.ts'
-import { extractJsonLd, extractShopify, nextPageUrl, type LlmExtractor, type RawListing } from './extract.ts'
+import { extractJsonLd, extractShopify, isShopifyPage, mergeListings, nextPageUrl, priceMentions, type LlmExtractor, type RawListing } from './extract.ts'
 import type { Fetcher, FetchOptions } from './fetcher.ts'
+import type { Mailer } from '../mail.ts'
+import { sendScanRecaps } from '../recap.ts'
 import { checkCanCreate, limitsFromEnv, ScanGuard } from './guard.ts'
-import { CatalogIndex, canonicalUrl, looksLikeVeja, type AliasIndex, type CatalogEntry } from './match.ts'
+import { CatalogIndex, listingKey, looksLikeVeja, type AliasIndex, type CatalogEntry } from './match.ts'
 
 export interface ScanDeps {
   db: Db
   fetcher: Fetcher | null
   llm?: LlmExtractor | null
+  /** E-mail de récapitulatif après chaque scan, pour les personnes qui l'ont activé. Absent : rien n'est envoyé. */
+  mailer?: Mailer | null
   env?: Record<string, string | undefined>
   log?: (event: string, data?: Record<string, unknown>) => void
   now?: () => Date
@@ -29,7 +33,7 @@ const num = (v: string | undefined, d: number) => (v && Number.isFinite(Number(v
 export async function createScan(
   deps: ScanDeps,
   zone: string,
-  opts: { trigger: 'manual' | 'scheduled'; requestedBy?: string; scheduledFor?: string; salePeriodId?: string },
+  opts: { trigger: 'manual' | 'scheduled'; requestedBy?: string; scheduledFor?: string; salePeriodId?: string; force?: boolean },
 ): Promise<{ id: string; sites: number } | null> {
   const { db } = deps
   return db.tx(async (q) => {
@@ -61,12 +65,14 @@ export async function createScan(
     if (!inserted.length) return null // déjà planifié aujourd'hui
     const id = inserted[0].id
     const sites = await q.query(
+      // Une page visitée avec succès depuis peu n'entre pas dans le scan (elle ne serait pas payée deux fois), sauf si l'on force.
       `insert into scan_sites (scan_id, zone_id, site_id, account_id)
        select $1, s.zone_id, s.id, s.account_id
        from account_sites s join accounts a on a.id = s.account_id
        where s.zone_id = $2 and s.enabled and a.status = 'active' and a.tracked
+         and ($3::boolean or not exists (select 1 from scan_sites x where x.site_id = s.id and x.status = 'ok' and x.finished_at > now() - ($4 || ' hours')::interval))
        returning id`,
-      [id, zone],
+      [id, zone, Boolean(opts.force), String(limitsFromEnv(deps.env ?? {}).siteCooldownHours)],
     )
     await q.query('update scans set sites_total = $2 where id = $1', [id, sites.length])
     return { id, sites: sites.length }
@@ -92,6 +98,7 @@ interface ProductRow {
   material: string
   color: string
   ean: string | null
+  season: string
   max_discount_pct: number | null
 }
 
@@ -116,7 +123,7 @@ export async function runScan(deps: ScanDeps, scanId: string): Promise<void> {
   try {
     if (!deps.fetcher) throw new Error('scraping-not-configured')
     const products = await db.query<ProductRow>(
-      "select id, sku, model, material, color, ean, max_discount_pct::float8 as max_discount_pct from products where zone_id = $1 and status = 'active'",
+      "select id, sku, model, material, color, ean, season, max_discount_pct::float8 as max_discount_pct from products where zone_id = $1 and status = 'active'",
       [zone],
     )
     const priceRows = await db.query<{ product_id: string; currency: string; amount: number }>(
@@ -134,15 +141,11 @@ export async function runScan(deps: ScanDeps, scanId: string): Promise<void> {
       [scanId],
     )
     const guard = new ScanGuard(db, limitsFromEnv(env), zone)
-    // Sites visités avec succès depuis peu : pas de seconde visite (évite de payer deux fois la même page).
-    const recent = new Set(
-      (await db.query<{ site_id: string }>("select distinct site_id from scan_sites where status = 'ok' and finished_at > now() - ($1 || ' hours')::interval", [String(guard.limits.siteCooldownHours)])).map((r) => r.site_id),
-    )
     let stopReason: string | null = null
     await pool(sites, num(env.SCAN_CONCURRENCY, 4), async (site) => {
-      const reason = recent.has(site.site_id) && guard.limits.siteCooldownHours > 0 ? 'recent' : await guard.blocked()
+      const reason = await guard.blocked()
       if (reason) {
-        if (reason !== 'recent') stopReason ??= reason
+        stopReason ??= reason
         await db.query("update scan_sites set status = 'skipped', finished_at = now(), error = $2 where id = $1", [site.scan_site_id, reason])
         await db.query('update scans set sites_done = sites_done + 1 where id = $1', [scanId])
         return
@@ -163,6 +166,8 @@ export async function runScan(deps: ScanDeps, scanId: string): Promise<void> {
     )
     await db.query('refresh materialized view weekly_listing_state').catch((e) => log('refresh-failed', { error: String(e) }))
     log('scan-finished', { scanId, zone, status })
+    // Récapitulatif par e-mail (opt-in). Un scan en échec total n'a rien à recommander : pas d'e-mail.
+    if (status !== 'failed') await sendScanRecaps(db, deps.mailer, zone, scanId, env.APP_URL || 'http://127.0.0.1:5173', log, env.DEFAULT_ZONE_ROLE ?? 'editor').catch((e) => log('recap-failed', { error: String(e) }))
   } catch (e) {
     await db.query("update scans set status = 'failed', finished_at = now(), error = $2 where id = $1", [scanId, String(e instanceof Error ? e.message : e).slice(0, 500)])
     log('scan-error', { scanId, error: String(e) })
@@ -212,40 +217,55 @@ async function runSite(deps: ScanDeps, scan: { scanId: string; zone: string; wee
       return r
     }
     let raw: RawListing[] = []
-    let learnedJs = false
     let isShopify = site.platform === 'shopify'
+    let level = 0 // échelle de coût atteinte pour cette page
+    let startLevel = 0
 
     if (isShopify) raw = await collectShopify(site.url, maxPages, (u) => get(u, { ...opts, renderJs: false }))
     if (!raw.length) {
-      // Collecte générique : pages successives (lien « suivant »), JSON-LD, puis rendu JavaScript, puis Claude.
-      const seen = new Set<string>()
-      let url: string | undefined = site.url
-      let jsOpts = opts
-      for (let page = 1; url && page <= maxPages && !seen.has(url); page++) {
-        seen.add(url)
-        let res = await get(url, jsOpts)
-        if (res.status >= 400 || !res.body) {
-          if (page === 1) throw new Error(`HTTP ${res.status}`)
-          break
-        }
-        if (page === 1 && /cdn\.shopify\.com/i.test(res.body)) isShopify = true
-        let found = extractJsonLd(res.body, url)
-        if (!found.length && page === 1 && !jsOpts.renderJs && opts.renderJs !== false) {
-          jsOpts = { ...opts, renderJs: true }
-          res = await get(url, jsOpts)
-          found = extractJsonLd(res.body, url)
-          learnedJs = found.length > 0
-        }
-        if (!found.length && page === 1 && deps.llm && ctx.guard.llmCalls++ < ctx.guard.limits.maxLlmCallsPerScan) {
-          const r = await deps.llm.extract(res.body, url).catch((e) => {
+      // Collecte générique, par échelle de coût croissant : 0 page simple (1 crédit) · 1 rendu JavaScript (5) · 2 proxy premium (25).
+      // On ne monte d'un cran que si la page est refusée (protection anti-robot) ou ne donne aucun produit.
+      const ladder = (lv: number): FetchOptions => ({ ...opts, renderJs: lv >= 1 || opts.renderJs === true, premiumProxy: lv >= 2 || opts.premiumProxy === true })
+      startLevel = opts.premiumProxy ? 2 : opts.renderJs ? 1 : 0
+      level = startLevel
+      const refused = (r: { status: number; body: string }) => !r.body || (r.status >= 400 && r.status !== 404 && r.status !== 410)
+      /** Lecture des produits d'une page : données structurées, complétées par Claude quand elles sont trop pauvres. */
+      const read = async (body: string, pageUrl: string): Promise<RawListing[]> => {
+        let found = extractJsonLd(body, pageUrl)
+        const mentions = priceMentions(body)
+        // Un produit affiche un ou deux prix : bien moins de produits que prévu = extraction incomplète.
+        const weak = found.length === 0 || (mentions >= 8 && found.length < mentions * 0.3)
+        if (weak && deps.llm && ctx.guard.llmCalls < ctx.guard.limits.maxLlmCallsPerScan) {
+          ctx.guard.llmCalls++
+          const r = await deps.llm.extract(body, pageUrl).catch((e) => {
             log('llm-failed', { site: site.url, error: String(e) })
             return { listings: [] as RawListing[], costUsd: 0 }
           })
-          found = r.listings
           llmCost += r.costUsd
+          found = mergeListings(found, r.listings)
+        }
+        return found
+      }
+      const seen = new Set<string>()
+      let url: string | undefined = site.url
+      for (let page = 1; url && page <= maxPages && !seen.has(url); page++) {
+        seen.add(url)
+        let res = await get(url, ladder(level))
+        while (refused(res) && level < 2) res = await get(url, ladder(++level))
+        if (refused(res)) {
+          if (page === 1) throw new Error(`HTTP ${res.status}`)
+          break
+        }
+        if (page === 1 && isShopifyPage(res.body)) isShopify = true
+        let found = await read(res.body, url)
+        // Page 1 sans aucun produit : page de blocage ou contenu chargé en différé. On monte d'un cran.
+        while (page === 1 && found.length === 0 && level < 2) {
+          res = await get(url, ladder(++level))
+          if (refused(res)) continue
+          found = await read(res.body, url)
         }
         const before = raw.length
-        raw = raw.concat(found.filter((f) => !raw.some((r) => r.url === f.url && r.title === f.title)))
+        raw = mergeListings(raw, found)
         if (raw.length === before) break
         url = nextPageUrl(res.body, url)
       }
@@ -253,7 +273,10 @@ async function runSite(deps: ScanDeps, scan: { scanId: string; zone: string; wee
     const stats = await db.tx((q) => persist(q, scan, site, ctx, raw))
     // Mémorise ce qui a marché : les prochains scans iront droit au but (moins de crédits).
     const patch: Record<string, unknown> = {}
-    if (learnedJs) patch.renderJs = true
+    if (raw.length > 0 && level > startLevel) {
+      patch.renderJs = true
+      if (level >= 2) patch.premiumProxy = true
+    }
     await db.query(
       `update account_sites set fetch_options = fetch_options || $2::text::jsonb, platform = coalesce(platform, $3) where id = $1`,
       [site.site_id, JSON.stringify(patch), isShopify ? 'shopify' : null],
@@ -304,7 +327,7 @@ async function persist(q: Sql, scan: { scanId: string; zone: string; weekOf: str
   const done = new Set<string>()
   for (const l of raw) {
     if (!(l.price > 0)) continue
-    const key = canonicalUrl(l.url)
+    const key = listingKey(l)
     if (done.has(key)) continue
     done.add(key)
     const m = ctx.index.match(l, site.site_id, ctx.aliases)
@@ -361,17 +384,17 @@ export async function writeEvaluation(
 
 /** Lit le catalogue d'une zone pour réévaluer (décisions humaines). */
 export async function loadEvalContext(q: Sql, zone: string): Promise<Pick<Ctx, 'byId' | 'rrp'>> {
-  const products = await q.query<ProductRow>("select id, sku, model, material, color, ean, max_discount_pct::float8 as max_discount_pct from products where zone_id = $1", [zone])
+  const products = await q.query<ProductRow>("select id, sku, model, material, color, ean, season, max_discount_pct::float8 as max_discount_pct from products where zone_id = $1", [zone])
   const prices = await q.query<{ product_id: string; currency: string; amount: number }>("select product_id, currency::text as currency, amount::float8 as amount from product_prices where zone_id = $1 and kind = 'rrp'", [zone])
   return { byId: new Map(products.map((p) => [p.id, p])), rrp: new Map(prices.map((p) => [`${p.product_id}|${p.currency}`, p.amount])) }
 }
 
 // ───────────────────────── Planification ─────────────────────────
 
-/** Plan de scan d'un jour : celui de la période de soldes qui le couvre, sinon chaque lundi. */
-export function planFor(date: string, periods: { id: string; start_on: string; end_on: string; scan_mode: string; scan_days: number[] | null }[]): { scan: boolean; periodId?: string } {
+/** Plan de scan d'un jour : celui de la période de soldes qui le couvre, sinon le rythme habituel de la zone (le lundi par défaut). */
+export function planFor(date: string, periods: { id: string; start_on: string; end_on: string; scan_mode: string; scan_days: number[] | null }[], defaultDays: number[] = [1]): { scan: boolean; periodId?: string } {
   const p = periods.find((x) => x.start_on <= date && date <= x.end_on)
-  if (!p) return { scan: isoWeekday(date) === 1 }
+  if (!p) return { scan: defaultDays.includes(isoWeekday(date)) }
   return { scan: p.scan_mode === 'daily' || (p.scan_days ?? []).includes(isoWeekday(date)), periodId: p.id }
 }
 
@@ -380,16 +403,22 @@ export function planFor(date: string, periods: { id: string; start_on: string; e
  * crée le scan du jour (une seule fois grâce à l'index unique) et le lance. Renvoie les scans lancés.
  */
 export async function tickScheduler(deps: ScanDeps, run: (p: Promise<void>) => void = (p) => void p): Promise<string[]> {
-  const zones = await deps.db.query<{ id: string; timezone: string; scan_time: string }>('select id, timezone, to_char(scan_time, \'HH24:MI\') as scan_time from zones')
+  const zones = await deps.db.query<{ id: string; timezone: string; scan_time: string; default_scan_days: number[]; upd_date: string; upd_time: string }>(
+    `select id, timezone, to_char(scan_time, 'HH24:MI') as scan_time, default_scan_days,
+            to_char(updated_at at time zone timezone, 'YYYY-MM-DD') as upd_date, to_char(updated_at at time zone timezone, 'HH24:MI') as upd_time
+     from zones`,
+  )
   const started: string[] = []
   for (const z of zones) {
     const local = zoneNow(z.timezone, deps.now?.())
     if (local.time < z.scan_time) continue
+    // Réglage modifié aujourd'hui après l'heure choisie : le scan de ce jour est considéré comme passé (pas de lancement surprise).
+    if (z.upd_date === local.date && z.upd_time > z.scan_time) continue
     const periods = await deps.db.query<{ id: string; start_on: string; end_on: string; scan_mode: string; scan_days: number[] | null }>(
       'select id, start_on::text as start_on, end_on::text as end_on, scan_mode::text as scan_mode, scan_days from sale_periods where zone_id = $1 and end_on >= $2::date',
       [z.id, addDays(local.date, -1)],
     )
-    const plan = planFor(local.date, periods)
+    const plan = planFor(local.date, periods, z.default_scan_days ?? [1])
     if (!plan.scan) continue
     const created = await createScan(deps, z.id, { trigger: 'scheduled', scheduledFor: local.date, salePeriodId: plan.periodId })
     if (created && created.sites > 0) {

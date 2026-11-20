@@ -71,6 +71,11 @@ export function formatShortDate(iso: string): string {
   return new Intl.DateTimeFormat(INTL[active], { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(parseIso(iso))
 }
 
+/** « 20 nov., 16:20 » : une date et une heure ISO (UTC) affichées à l'heure de l'utilisateur. */
+export function formatDateTime(iso: string): string {
+  return new Intl.DateTimeFormat(INTL[active], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso))
+}
+
 /** « 16 novembre 2026 » */
 export function formatFullDate(iso: string): string {
   return new Intl.DateTimeFormat(INTL[active], { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(parseIso(iso))

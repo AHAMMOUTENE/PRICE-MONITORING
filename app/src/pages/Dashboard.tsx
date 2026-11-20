@@ -4,6 +4,8 @@ import { BarChart, MiniBars } from '../components/charts'
 import { ExportMenu } from '../components/ExportMenu'
 import { SeeMore } from '../components/SeeMore'
 import { AccountLogo, Card, CommentCell, DiscountPill, Empty, ErrorBlock, KpiCard, LoadingBlock, PageHeader, ProductImage } from '../components/ui'
+import { LastScan } from '../components/ScanButton'
+import { SeasonFilter } from '../components/SeasonFilter'
 import { WeekPicker } from '../components/WeekPicker'
 import { refresh, useQuery, useZone } from '../lib/app'
 import { formatDiscount, formatMoney, formatShortDate } from '../lib/format'
@@ -60,9 +62,11 @@ export function Dashboard() {
     <div className="page">
       <PageHeader
         title={t('dash.title')}
-        subtitle={t('app.demo')}
+        subtitle={import.meta.env.VITE_API_URL ? undefined : t('app.demo')}
         actions={
           <>
+            <LastScan lastScan={o.lastScan} />
+            <SeasonFilter />
             <WeekPicker stats={o.weekStats} value={o.weekOf} onChange={goWeek} />
             <span data-tour="export">
               <ExportMenu weekOf={o.weekOf} weeks={o.weeks} />

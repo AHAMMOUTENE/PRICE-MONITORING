@@ -26,7 +26,7 @@
 
 1. **Déclenchement** : planificateur (une fois par jour de scan et par zone, à l'heure locale de la zone) ou bouton « Scanner » (manuel).
 2. **Création** : un scan et une ligne par page de site des comptes suivis (`scans`, `scan_sites`). L'index unique `(zone, jour)` rend le déclenchement planifié idempotent.
-3. **Collecte** par page : ScrapingBee sans rendu JavaScript (1 crédit) ; si rien n'est trouvé, nouvel essai avec rendu (5 crédits, mémorisé pour la page) ; si toujours rien et si la clé existe, lecture par Claude. Pagination par le lien « suivant ».
+3. **Collecte** par page, par cran de coût : page simple (1 crédit), rendu JavaScript (5), proxy premium (25) ; on ne monte que si la page est refusée ou ne donne aucun produit, et le cran qui a marché est mémorisé. Les données structurées sont complétées par la lecture de Claude quand elles sont trop pauvres. Un modèle présenté en plusieurs couleurs donne une fiche par couleur. Pagination par le lien « suivant ».
 4. **Rapprochement** de chaque fiche avec le catalogue : décision humaine déjà prise, EAN, SKU lu dans la référence ou l'adresse, titre identique, titre proche. Les fiches d'autres marques sont écartées.
 5. **Écriture** : `listings` (fiche vue), `observations` (relevé de prix, jamais modifié), `observation_evaluations` (évaluation figée : SKU, RRP, règle, remise, anomalie).
 6. **Fin** : statut `done`, `partial` (un site en échec ou arrêté par un garde-fou) ou `failed`.

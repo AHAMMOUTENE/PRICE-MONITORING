@@ -1,3 +1,4 @@
+import { SeasonFilter } from '../components/SeasonFilter'
 import { useState } from 'react'
 import { api } from '../api'
 import { DataGrid, type GridColumn } from '../components/DataGrid'
@@ -41,7 +42,7 @@ export function Products() {
       get: (p) => `${p.item.model} ${p.item.material} ${p.item.color} ${p.sku}`,
       render: (p) => (
         <a className="cell-account" href={`#${detail(p.sku)}`}>
-          <ProductImage sku={p.sku} color={p.item.color} label={p.item.model} size={44} />
+          <ProductImage src={p.item.image} sku={p.sku} color={p.item.color} label={p.item.model} size={44} />
           <span>
             <b>
               {p.item.model} {p.item.color}
@@ -84,7 +85,13 @@ export function Products() {
 
   return (
     <div className="page">
-      <PageHeader title={t('products.title')} actions={<WeekPicker stats={o.weekStats} value={o.weekOf} onChange={goWeek} />} />
+      <PageHeader title={t('products.title')} actions={
+          <>
+            <SeasonFilter />
+            <WeekPicker stats={o.weekStats} value={o.weekOf} onChange={goWeek} />
+          </>
+        }
+      />
 
       {all.length === 0 ? (
         <Empty title={t('products.empty')} />

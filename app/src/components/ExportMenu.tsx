@@ -5,7 +5,7 @@ import { useToast } from './toast'
 import { useZone } from '../lib/app'
 import { formatShortDate } from '../lib/format'
 import { useT } from '../lib/i18n'
-import { downloadWorkbook } from '../lib/xlsx-export'
+import { downloadHistory, downloadWorkbook } from '../lib/xlsx-export'
 
 /**
  * Bouton d'export Excel avec deux choix : la semaine affichée, ou tout l'historique.
@@ -46,6 +46,19 @@ export function ExportMenu({ weekOf, weeks }: { weekOf: string; weeks: string[] 
     }
   }
 
+  /** Historique des prix par retailer et produit, à chaque scan depuis le premier. Indépendant de la semaine et de la saison affichées. */
+  const runHistory = async () => {
+    setOpen(false)
+    setBusy(true)
+    try {
+      const data = await api.buildHistoryExport(zone)
+      await downloadHistory(data, `PRICE_HISTORY_${zone}_${(data.scans[data.scans.length - 1] ?? weekOf).slice(0, 10)}.xlsx`)
+      toast.show(t('common.exported'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const oldest = weeks[weeks.length - 1] ?? weekOf
   const newest = weeks[0] ?? weekOf
 
@@ -63,6 +76,10 @@ export function ExportMenu({ weekOf, weeks }: { weekOf: string; weeks: string[] 
           <button role="menuitem" className="menu-item" onClick={() => run(oldest, newest)}>
             <b>{t('export.all')}</b>
             <span>{t('count.week', { n: weeks.length })}</span>
+          </button>
+          <button role="menuitem" className="menu-item" onClick={runHistory}>
+            <b>{t('export.history')}</b>
+            <span>{t('export.historyHint')}</span>
           </button>
         </div>
       )}

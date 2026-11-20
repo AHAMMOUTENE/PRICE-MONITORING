@@ -7,6 +7,7 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { existsSync } from 'node:fs'
 import { createApp } from './app.ts'
 import { postgresDb } from './db.ts'
+import { mailerFromEnv } from './mail.ts'
 import { extractorFromEnv } from './scrape/extract.ts'
 import { fetcherFromEnv } from './scrape/fetcher.ts'
 import { recoverScans, tickScheduler, type ScanDeps } from './scrape/scan.ts'
@@ -24,7 +25,7 @@ if (!env.DATABASE_URL) {
 const log = (event: string, data?: Record<string, unknown>) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...data }))
 
 const db = postgresDb(env.DATABASE_URL)
-const deps: ScanDeps = { db, fetcher: fetcherFromEnv(env), llm: extractorFromEnv(env), env, log }
+const deps: ScanDeps = { db, fetcher: fetcherFromEnv(env), llm: extractorFromEnv(env), mailer: mailerFromEnv(env), env, log }
 if (!deps.fetcher) log('warning', { message: 'SCRAPINGBEE_API_KEY absent : les scans sont désactivés' })
 if (!deps.llm) log('info', { message: 'ANTHROPIC_API_KEY absent : pas de lecture par Claude des pages sans données structurées' })
 

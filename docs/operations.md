@@ -11,7 +11,7 @@ Par page de site visitée :
 | ScrapingBee, proxy premium (sites protégés) | 10 à 25 crédits |
 | Lecture par Claude (seulement si les données structurées manquent) | quelques centimes la page |
 
-Le serveur commence sans rendu JavaScript, passe au rendu seulement si la page ne donne rien, puis **mémorise** ce qui a marché pour la page afin de ne plus payer deux fois. Les boutiques Shopify sont lues par `products.json` (pas de HTML). Le coût estimé de chaque page est enregistré dans `scan_sites`.
+Le serveur monte **par cran** : page simple (1 crédit) ; si la page est refusée (erreur 500, protection anti-robot) ou ne donne aucun produit, rendu JavaScript (5) ; si cela ne suffit pas, proxy premium (25). Il **mémorise** le cran qui a marché pour la page afin de ne plus payer deux fois. Quand les données structurées d'une page sont trop pauvres par rapport au nombre de prix qu'elle affiche (par exemple 5 produits lus sur 24), la lecture est **complétée par Claude**. Les boutiques Shopify sont lues par `products.json` (pas de HTML). Le coût estimé de chaque page est enregistré dans `scan_sites`.
 
 Estimation : `coût d'un scan ≈ nombre de pages × crédits par page × prix du crédit` (réglable avec `SCRAPINGBEE_CREDIT_USD`). L'écran du calendrier donne le nombre de scans et de visites d'une période.
 
@@ -39,6 +39,20 @@ Quand un garde-fou joue, les pages restantes sont marquées « ignoré » avec l
 
 **Coupure d'urgence** : mettre `SCANS_ENABLED=false`. Sur Cloudflare, c'est une variable du Worker, effective sans redéploiement du code.
 
+## E-mail de récapitulatif après chaque scan
+
+Chaque utilisateur peut l'activer **zone par zone** en haut de la page Notifications (désactivé par défaut) et choisir ses rubriques d'actions : retailers à revoir, toujours à corriger depuis le scan précédent, à faire (produits à identifier, retailers sans site). L'e-mail commence par les **indicateurs** du tableau de bord (produits en anomalie et écart avec le scan précédent, nouvelles anomalies, produits à identifier, retailers concernés sur le total suivi), puis liste les **actions à mener**, avec un lien vers chaque retailer et vers l'application, dans la langue de l'utilisateur. Les indicateurs sont toujours présents ; seules les rubriques d'actions se choisissent. Rien n'est envoyé après un scan en échec total, ni à quelqu'un qui ne l'a pas activé.
+
+Pour que les e-mails partent, trois variables dans `api/.env` (ou les secrets Cloudflare) :
+
+| Variable | Rôle |
+| --- | --- |
+| `RESEND_API_KEY` | Clé du service d'envoi [Resend](https://resend.com). |
+| `MAIL_FROM` | Adresse d'expédition, sur un **domaine vérifié** chez Resend (enregistrements DNS à ajouter par l'infrastructure). |
+| `APP_URL` | Adresse publique de l'application, utilisée dans les liens. |
+
+Sans elles, le choix des utilisateurs est enregistré mais rien ne part ; la page Notifications le dit.
+
 ## Surveiller
 
 - `scans` : statut, nombre de pages faites et en échec, crédits, coût estimé, raison d'arrêt (`error`).
@@ -53,6 +67,7 @@ Quand un garde-fou joue, les pages restantes sont marquées « ignoré » avec l
 | « Le serveur est injoignable » | L'API n'est pas lancée, ou `DATABASE_URL` est fausse. |
 | « Sign in » à chaque rechargement | Le SSO simulé garde la session dans un cookie ; après un redémarrage de l'API, il faut se reconnecter. |
 | Scan refusé (422 `scraping-not-configured`) | `SCRAPINGBEE_API_KEY` absente. |
+| Toutes les pages « fetch failed », 0 crédit | Réseau d'entreprise qui inspecte le trafic sécurisé : Node refuse son certificat (`SELF_SIGNED_CERT_IN_CHAIN`). Lancer avec `NODE_USE_SYSTEM_CA=1` (déjà fait par `npm run dev`). N'utilisez jamais `NODE_TLS_REJECT_UNAUTHORIZED=0` : la clé ScrapingBee passe dans l'adresse. |
 | Une page revient toujours « vide » | Site protégé ou chargé en différé : renseigner `fetch_options` de la page (`renderJs`, `premiumProxy`, `countryCode`) dans `account_sites`. |
 | Beaucoup de produits « à identifier » | Compléter les EAN et les couleurs du catalogue ; les décisions humaines sont retenues pour les scans suivants. |
 

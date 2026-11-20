@@ -14,7 +14,7 @@ import type { ZoneView } from '../lib/app'
 /** Logo officiel, servi par le serveur d'images de VEJA. */
 const VEJA_LOGO = 'https://media.veja-store.com/image/upload/v1694534613/VEJA/LOGOS/VEJA-BLACK-LOGO-TEXT.png'
 
-const ACTIONABLE = new Set(['to-review', 'recurrence'])
+const ACTIONABLE = new Set(['review', 'recurrence'])
 const SIDE_KEY = 'pm.side'
 
 interface Item {
@@ -84,6 +84,7 @@ export function Shell({ children }: { children: ReactNode }) {
         { href: '/reglages/produits', label: t('nav.manageProducts'), current: path === '/reglages/produits' },
       ],
     },
+    { href: '/scanner', label: t('nav.scan'), icon: 'refresh', current: path === '/scanner', tour: 'nav-scan' },
     { href: '/reglages/calendrier', label: t('nav.calendar'), icon: 'calendar', current: path === '/reglages/calendrier' },
   ]
   const bottom: Item[] = [{ href: '/historique', label: t('nav.history'), icon: 'file', current: path === '/historique' }]

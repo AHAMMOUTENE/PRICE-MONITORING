@@ -59,6 +59,18 @@ export async function buildState(q: Sql, zone: string, opts: StateOptions) {
     if (item) item[p.kind][p.currency] = p.amount
   }
 
+  // Image d'un produit : celle de sa fiche confirmée la plus récemment vue chez un retailer.
+  const images = await q.query<{ product_id: string; image: string }>(
+    `select distinct on (l.product_id) l.product_id, l.image_url as image from listings l
+     where l.zone_id = $1 and l.product_id is not null and l.image_url is not null and l.status = 'active'
+     order by l.product_id, l.last_seen_at desc`,
+    [zone],
+  )
+  for (const im of images) {
+    const item = byId.get(im.product_id)
+    if (item) item.image = im.image
+  }
+
   const periods = await q.query<{ id: string; label: string; start: string; end: string; mode: string; days: number[] | null }>(
     'select id, label, start_on::text as start, end_on::text as "end", scan_mode::text as mode, scan_days as days from sale_periods where zone_id = $1 order by start_on',
     [zone],
@@ -88,6 +100,12 @@ export async function buildState(q: Sql, zone: string, opts: StateOptions) {
   )
   const byListing = new Map<string, typeof weekly>()
   for (const w of weekly) byListing.set(w.listing_id, [...(byListing.get(w.listing_id) ?? []), w])
+
+  const [last] = await q.query<{ at: string; status: string }>(
+    `select ${ts('finished_at')} as at, status::text as status from scans where zone_id = $1 and finished_at is not null order by finished_at desc limit 1`,
+    [zone],
+  )
+  const [running] = await q.query<{ n: number }>("select count(*)::int as n from scans where zone_id = $1 and status in ('queued', 'running')", [zone])
 
   const observations = []
   for (const l of listings) {
@@ -136,5 +154,64 @@ export async function buildState(q: Sql, zone: string, opts: StateOptions) {
     comments,
     activity,
     observations,
+    lastScan: last ? { ...last, running: (running?.n ?? 0) > 0 } : running?.n ? { at: '', status: 'running', running: true } : null,
   }
+}
+
+/**
+ * Historique complet d'une zone pour l'export Excel : une ligne par fiche (retailer × produit), un prix par scan
+ * depuis le tout premier. Ne dépend ni de la saison ni de la semaine : c'est l'évolution du prix à chaque passage.
+ * Le RRP et la remise autorisée sont ceux d'aujourd'hui.
+ */
+export async function buildHistoryExport(q: Sql, zone: string) {
+  const obs = await q.query<{ listing_id: string; scan_id: string; at: string; retailer: string; segmentation: string; reps: string[]; title: string; url: string; proof: string; pid: string | null; price: number; currency: string }>(
+    `select l.id as listing_id, o.scan_id, ${ts('s.created_at')} as at, a.name as retailer, a.segmentation, a.sales_reps as reps, l.title, l.url, l.proof::text as proof,
+            coalesce(l.product_id, l.candidate_product_id) as pid, o.price::float8 as price, o.currency::text as currency
+     from observations o
+     join scans s on s.id = o.scan_id
+     join listings l on l.id = o.listing_id
+     join accounts a on a.id = l.account_id
+     where o.zone_id = $1 and a.status = 'active' and l.status = 'active'
+     order by lower(a.name), l.title, s.created_at`,
+    [zone],
+  )
+  const products = await q.query<{ id: string; sku: string; model: string; color: string; season: string; rule: number | null }>(
+    "select id, sku, model, color, season, max_discount_pct::float8 as rule from products where zone_id = $1 and status = 'active'",
+    [zone],
+  )
+  const rrps = await q.query<{ product_id: string; currency: string; amount: number }>(
+    "select product_id, currency::text as currency, amount::float8 as amount from product_prices where zone_id = $1 and kind = 'rrp'",
+    [zone],
+  )
+  const byProduct = new Map(products.map((p) => [p.id, p]))
+  const rrp = new Map(rrps.map((r) => [`${r.product_id}|${r.currency}`, r.amount]))
+  // Les colonnes : chaque scan qui a relevé au moins un prix, du plus ancien au plus récent.
+  const scanAt = new Map<string, string>()
+  for (const o of obs) scanAt.set(o.scan_id, o.at)
+  const scans = [...scanAt.entries()].sort((a, b) => a[1].localeCompare(b[1]))
+  const byListing = new Map<string, typeof obs>()
+  for (const o of obs) byListing.set(o.listing_id, [...(byListing.get(o.listing_id) ?? []), o])
+  const rows = [...byListing.values()].map((list) => {
+    const first = list[0]
+    const last = list[list.length - 1]
+    const p = first.pid ? byProduct.get(first.pid) : undefined
+    const byScan = new Map(list.map((o) => [o.scan_id, o.price]))
+    return {
+      retailer: first.retailer,
+      segmentation: first.segmentation,
+      salesReps: (first.reps ?? []).join(', '),
+      title: first.title,
+      url: first.url,
+      sku: p?.sku ?? '',
+      model: p?.model ?? '',
+      color: p?.color ?? '',
+      season: p?.season ?? '',
+      proof: first.proof,
+      currency: last.currency,
+      rrp: p ? (rrp.get(`${p.id}|${last.currency}`) ?? null) : null,
+      allowedPct: p?.rule ?? null,
+      prices: scans.map(([id]) => byScan.get(id) ?? null),
+    }
+  })
+  return { zone, scans: scans.map(([, at]) => at), rows }
 }

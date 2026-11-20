@@ -1,21 +1,25 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../../api'
 import { HScroll } from '../../components/HScroll'
 import { Icon } from '../../components/Icon'
 import { ImportDrawer } from '../../components/ImportDrawer'
 import { useToast } from '../../components/toast'
-import { Card, Empty, ErrorBlock, LoadingBlock, PageHeader, ProductImage } from '../../components/ui'
+import { CurrencySelect } from '../../components/CurrencySelect'
+import { Card, Drawer, Empty, ErrorBlock, LoadingBlock, PageHeader, ProductImage } from '../../components/ui'
 import { refresh, useQuery, useZone } from '../../lib/app'
 import { CURRENCIES } from '../../lib/currencies'
 import { formatMoney } from '../../lib/format'
 import { matchNumber } from '../../lib/grid'
+import { ZONES, zoneInfo } from '../../lib/zones'
 import { useT } from '../../lib/i18n'
+import { useRoute } from '../../lib/router'
 import { sortBy, SortTh, useSort } from '../../lib/sort'
-import type { CatalogItem, Currency } from '../../types'
+import type { CatalogItem, Currency, Zone } from '../../types'
 
 /** Remises proposées pour la règle d'un produit, en plus de « par défaut » et « non soldé ». */
 const RULE_STEPS = [10, 15, 20, 25, 30, 40, 50]
-const STORAGE = 'pm.catalogCols.v2'
+/** Le choix de colonnes est propre à chaque zone : les devises d'EMEA ne s'imposent pas à APAC. */
+const storageKey = (zone: string) => `pm.catalogCols.v3.${zone}`
 
 type TextCol = 'model' | 'material' | 'color' | 'dept' | 'season' | 'segmentation' | 'colorCode' | 'description' | 'composition' | 'origin' | 'ean'
 type FixedCol = 'sku' | 'variants' | TextCol | 'carryOver' | 'rule'
@@ -30,9 +34,9 @@ const VIEWS: Record<'essential' | 'prices' | 'all', (currencies: Currency[]) => 
   all: (c) => [...FIXED, ...c.flatMap((x): ColKey[] => [`whs:${x}`, `rrp:${x}`])],
 }
 
-function readCols(): ColKey[] | null {
+function readCols(zone: string): ColKey[] | null {
   try {
-    const raw = localStorage.getItem(STORAGE)
+    const raw = localStorage.getItem(storageKey(zone))
     return raw ? (JSON.parse(raw) as ColKey[]) : null
   } catch {
     return null
@@ -47,13 +51,17 @@ function readCols(): ColKey[] | null {
 export function ProductsSettings() {
   const { t } = useT()
   const { zone } = useZone()
-  const toast = useToast()
   const catalog = useQuery(() => api.listCatalog(zone), [zone])
   const zoneCurrencies = useQuery(() => api.listCurrencies(zone), [zone])
-  const [importing, setImporting] = useState(false)
+  const { params } = useRoute()
+  const importParam = params.get('import') === '1' // le tutoriel ouvre l'import pour montrer le modèle
+  const [importing, setImporting] = useState(importParam)
+  const [editing, setEditing] = useState<CatalogItem | 'new' | null>(null) // produit ouvert dans le panneau de droite
+  useEffect(() => setImporting(importParam), [importParam])
   const { sort, toggle } = useSort()
   const [filters, setFilters] = useState<Record<string, string>>({})
-  const [cols, setColsState] = useState<ColKey[] | null>(readCols)
+  const [cols, setColsState] = useState<ColKey[] | null>(() => readCols(zone))
+  useEffect(() => setColsState(readCols(zone)), [zone])
 
   if (catalog.error) return <div className="page"><ErrorBlock message={catalog.error} onRetry={refresh} /></div>
   if (!catalog.data || !zoneCurrencies.data) return <div className="page"><LoadingBlock /></div>
@@ -61,13 +69,23 @@ export function ProductsSettings() {
   // Devises du catalogue : celles des sites de la zone d'abord, puis toutes celles qui ont un prix dans le fichier.
   const inCatalog = new Set<Currency>()
   for (const c of catalog.data) for (const cur of [...Object.keys(c.rrp), ...Object.keys(c.wholesale)]) inCatalog.add(cur)
-  const currencies = [...zoneCurrencies.data, ...CURRENCIES.filter((c) => inCatalog.has(c) && !zoneCurrencies.data!.includes(c)), ...[...inCatalog].filter((c) => !CURRENCIES.includes(c) && !zoneCurrencies.data!.includes(c))]
+  // Le catalogue est commun à toutes les zones : on affiche les prix de toutes les devises présentes, groupés par zone.
+  const zoneIds = [zone, ...ZONES.map((z) => z.id).filter((z) => z !== zone)]
+  const known = zoneIds.flatMap((z) => zoneInfo(z).currencies)
+  // La devise de la zone est toujours proposée (même sans prix encore), pour pouvoir la remplir.
+  const wanted = (c: Currency) => inCatalog.has(c) || zoneCurrencies.data!.includes(c) || c === zoneInfo(zone).defaultCurrency
+  const groups = zoneIds.map((z) => ({ zone: z, cur: zoneInfo(z).currencies.filter(wanted) })).filter((g) => g.cur.length > 0)
+  const others = [...inCatalog].filter((c) => !known.includes(c) && !CURRENCIES.includes(c))
+  const currencies = [...groups.flatMap((g) => g.cur), ...others]
+  const here = groups.find((g) => g.zone === zone)?.cur ?? currencies.slice(0, 3) // devises de la zone consultée
+  const priceKeys = (cur: Currency[]): ColKey[] => cur.flatMap((x): ColKey[] => [`rrp:${x}`, `whs:${x}`])
   const allCols: ColKey[] = VIEWS.all(currencies)
-  const shown: ColKey[] = (cols ?? VIEWS.all(currencies)).filter((k) => allCols.includes(k))
+  const defaultCols: ColKey[] = ['sku', 'model', 'color', 'season', 'carryOver', 'rule', ...priceKeys(here)]
+  const shown: ColKey[] = (cols ?? defaultCols).filter((k) => allCols.includes(k))
   const setCols = (next: ColKey[]) => {
     setColsState(next)
     try {
-      localStorage.setItem(STORAGE, JSON.stringify(next))
+      localStorage.setItem(storageKey(zone), JSON.stringify(next))
     } catch {
       /* non mémorisé */
     }
@@ -116,24 +134,20 @@ export function ProductsSettings() {
     },
   )
 
-  const save = async (sku: string, patch: Parameters<typeof api.updateProduct>[2]) => {
-    await api.updateProduct(zone, sku, patch)
-    refresh()
-    toast.show(t('sProducts.saved'))
-  }
-  const money = (c: CatalogItem, value: number | undefined, cur: string, label: string, apply: (v: number | undefined) => Parameters<typeof api.updateProduct>[2]) => (
-    <TextCell value={value === undefined ? '' : String(value)} display={value === undefined ? '' : formatMoney(value, cur)} label={label} numeric onSave={(v) => save(c.sku, apply(v === '' ? undefined : Number(v.replace(',', '.'))))} />
-  )
-
   return (
     <div className="page">
       <PageHeader
         title={t('sProducts.title')}
         subtitle={`${t('count.product', { n: catalog.data.length })} · ${t('sProducts.editHint')}`}
         actions={
-          <button className="btn btn-primary" data-tour="import-catalog" onClick={() => setImporting(true)}>
-            <Icon name="upload" /> {t('sProducts.import')}
-          </button>
+          <>
+            <button className="btn btn-secondary" data-tour="import-catalog" onClick={() => setImporting(true)}>
+              <Icon name="upload" /> {t('sProducts.import')}
+            </button>
+            <button className="btn btn-primary" onClick={() => setEditing('new')}>
+              <Icon name="plus" /> {t('sProducts.add')}
+            </button>
+          </>
         }
       />
 
@@ -153,7 +167,7 @@ export function ProductsSettings() {
           <div className="colpick-menu">
             <div className="seg" role="group" aria-label={t('sProducts.columns')}>
               {(['essential', 'prices', 'all'] as const).map((v) => (
-                <button key={v} aria-pressed={JSON.stringify(VIEWS[v](currencies)) === JSON.stringify(shown)} onClick={() => setCols(VIEWS[v](currencies))}>
+                <button key={v} aria-pressed={JSON.stringify(VIEWS[v](v === 'all' ? currencies : here)) === JSON.stringify(shown)} onClick={() => setCols(VIEWS[v](v === 'all' ? currencies : here))}>
                   {t(`sProducts.view.${v}` as const)}
                 </button>
               ))}
@@ -179,6 +193,7 @@ export function ProductsSettings() {
                 {shown.map((k) => (
                   <SortTh key={k} col={k} label={colLabel(k)} sort={sort} onSort={toggle} numeric={isNumCol(k) || k === 'rule'} className={isNumCol(k) ? 'num' : undefined} />
                 ))}
+                <th aria-label={t('common.edit')} />
               </tr>
               <tr className="filter-row">
                 <th scope="col">
@@ -200,21 +215,22 @@ export function ProductsSettings() {
                     )}
                   </th>
                 ))}
+                <th />
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={shown.length + 1}>
+                  <td colSpan={shown.length + 2}>
                     <Empty title={t('sProducts.noMatch')} />
                   </td>
                 </tr>
               )}
               {rows.map((c) => (
-                <tr key={c.sku}>
+                <tr key={c.sku} className="is-clickable" onClick={() => setEditing(c)}>
                   <td>
                     <span className="cell-account">
-                      <ProductImage sku={c.sku} color={c.color} label={c.model} size={40} />
+                      <ProductImage src={c.image} sku={c.sku} color={c.color} label={c.model} size={40} />
                       <span>
                         <b>{c.model}</b>
                         <small>{c.color}</small>
@@ -222,61 +238,23 @@ export function ProductsSettings() {
                     </span>
                   </td>
                   {shown.map((k) => {
-                    if (k === 'sku') return <td key={k} className="muted">{c.sku}</td>
                     if (k === 'variants') return <td key={k} className="muted">{c.variants?.join(' · ') || '—'}</td>
-                    if (k === 'carryOver')
-                      return (
-                        <td key={k}>
-                          <label className="cell-check" title={t('label.carryOver')}>
-                            <input
-                              type="checkbox"
-                              checked={Boolean(c.carryOver)}
-                              aria-label={`${t('col.carryOver')} ${c.sku}`}
-                              onChange={(e) => {
-                                const on = e.target.checked
-                                // Un carry-over n'est pas soldé : la règle suit, sauf si elle a été réglée à la main.
-                                const patch: Parameters<typeof api.updateProduct>[2] = { carryOver: on || undefined }
-                                if (on && c.maxDiscountPct === undefined) patch.maxDiscountPct = 0
-                                if (!on && c.maxDiscountPct === 0) patch.maxDiscountPct = undefined
-                                save(c.sku, patch)
-                              }}
-                            />
-                            <span>{c.carryOver ? t('pill.carryOver') : '—'}</span>
-                          </label>
-                        </td>
-                      )
-                    if (k === 'rule') {
-                      const own = c.maxDiscountPct
-                      const steps = own !== undefined && own > 0 && !RULE_STEPS.includes(own) ? [...RULE_STEPS, own].sort((a, b) => a - b) : RULE_STEPS
-                      return (
-                        <td key={k}>
-                          <select className={`cell-select rule-select${own === undefined ? ' is-default' : ''}`} aria-label={`${t('col.rule')} ${c.sku}`} value={own === undefined ? '' : String(own)} onChange={(e) => save(c.sku, { maxDiscountPct: e.target.value === '' ? undefined : Number(e.target.value) })}>
-                            <option value="">{t('rule.unset')}</option>
-                            <option value="0">{t('rule.none')}</option>
-                            {steps.map((n) => (
-                              <option key={n} value={String(n)}>
-                                {n} %
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                      )
-                    }
-                    if (k.startsWith('rrp:')) {
+                    if (k === 'sku') return <td key={k} className="muted">{c.sku}</td>
+                    if (k === 'carryOver') return <td key={k}>{c.carryOver ? t('pill.carryOver') : '—'}</td>
+                    if (k === 'rule') return <td key={k}>{cell(c, 'rule')}</td>
+                    if (k.startsWith('rrp:') || k.startsWith('whs:')) {
                       const cur = k.slice(4)
-                      return <td key={k} className="num">{money(c, c.rrp[cur], cur, colLabel(k), (v) => ({ rrp: { [cur]: v } }))}</td>
+                      const v = k.startsWith('rrp:') ? c.rrp[cur] : c.wholesale[cur]
+                      return <td key={k} className="num">{v === undefined ? <span className="muted">—</span> : formatMoney(v, cur)}</td>
                     }
-                    if (k.startsWith('whs:')) {
-                      const cur = k.slice(4)
-                      return <td key={k} className="num">{money(c, c.wholesale[cur], cur, colLabel(k), (v) => ({ wholesale: { [cur]: v } }))}</td>
-                    }
-                    const key = k as TextCol
-                    return (
-                      <td key={k}>
-                        <TextCell value={c[key] ?? ''} label={colLabel(k)} wide={key === 'description' || key === 'composition'} onSave={(v) => save(c.sku, { [key]: key === 'season' ? v.toUpperCase() : v })} />
-                      </td>
-                    )
+                    const text = c[k as TextCol]
+                    return <td key={k}>{text || <span className="muted">—</span>}</td>
                   })}
+                  <td className="num">
+                    <button className="iconbtn" aria-label={`${t('common.edit')} ${c.sku}`} title={t('common.edit')} onClick={(e) => (e.stopPropagation(), setEditing(c))}>
+                      <Icon name="edit" />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -284,13 +262,14 @@ export function ProductsSettings() {
         </HScroll>
       </Card>
 
+      {editing && <ProductDrawer zone={zone} initial={editing === 'new' ? undefined : editing} currencies={currencies} onClose={() => setEditing(null)} />}
+
       {importing && (
         <ImportDrawer
           title={t('import.catalogTitle')}
           hint={t('import.catalogHint', { columns: ['SEASON', 'SEASONALITY', 'MAX DISCOUNT %', ...currencies.map((c) => `UNIT PRICE ${c}`), ...currencies.map((c) => `RRP ${c}`)].join(', ') })}
           template="catalog"
           onPreview={(f, o) => api.previewCatalogImport(f, zone, o)}
-          onDone={(n) => toast.show(t('toast.imported', { n }))}
           onClose={() => setImporting(false)}
         />
       )}
@@ -298,30 +277,177 @@ export function ProductsSettings() {
   )
 }
 
-/** Une cellule modifiable : le texte s'enregistre quand on quitte la cellule ou avec Entrée ; Échap annule. */
-function TextCell({ value, display, label, numeric = false, wide = false, onSave }: { value: string; display?: string; label: string; numeric?: boolean; wide?: boolean; onSave: (v: string) => void }) {
-  const [draft, setDraft] = useState<string | null>(null)
-  const [editing, setEditing] = useState(false)
-  const commit = () => {
-    if (draft !== null && draft.trim() !== value) onSave(draft.trim())
-    setDraft(null)
-    setEditing(false)
+const TEXT_FIELDS = ['dept', 'segmentation', 'colorCode', 'ean', 'description', 'composition', 'origin'] as const
+
+/**
+ * Panneau de droite pour ajouter ou modifier un produit (comme pour les retailers).
+ * Ajout : SKU de 9 caractères (une lettre A, B, C ou D à la suite indique la variante), modèle et couleur obligatoires.
+ * Modification : le SKU ne change pas ; seuls les champs modifiés sont enregistrés.
+ */
+function ProductDrawer({ zone, initial, currencies, onClose }: { zone: Zone; initial?: CatalogItem; currencies: Currency[]; onClose: () => void }) {
+  const { t } = useT()
+  const toast = useToast()
+  const isNew = !initial
+  const defaultCurrency = zoneInfo(zone).defaultCurrency
+  const [sku, setSku] = useState(initial?.sku ?? '')
+  const [model, setModel] = useState(initial?.model ?? '')
+  const [material, setMaterial] = useState(initial?.material ?? '')
+  const [color, setColor] = useState(initial?.color ?? '')
+  const [season, setSeason] = useState(initial?.season ?? '')
+  const [carryOver, setCarryOver] = useState(Boolean(initial?.carryOver))
+  const [rule, setRule] = useState(initial?.maxDiscountPct === undefined ? '' : String(initial.maxDiscountPct)) // '' non contrôlé · '0' non soldé · pourcentage
+  const [extra, setExtra] = useState<Record<string, string>>(Object.fromEntries(TEXT_FIELDS.map((k) => [k, initial?.[k] ?? ''])))
+  const shownCurrencies = [...new Set([...(isNew ? [defaultCurrency] : []), ...currencies, ...Object.keys(initial?.rrp ?? {}), ...Object.keys(initial?.wholesale ?? {})])]
+  const [more, setMore] = useState<Currency[]>([])
+  const rows = [...shownCurrencies, ...more.filter((c) => !shownCurrencies.includes(c))]
+  const [rrp, setRrp] = useState<Record<string, string>>(Object.fromEntries(rows.map((c) => [c, initial?.rrp[c] === undefined ? '' : String(initial.rrp[c])])))
+  const [whs, setWhs] = useState<Record<string, string>>(Object.fromEntries(rows.map((c) => [c, initial?.wholesale[c] === undefined ? '' : String(initial.wholesale[c])])))
+  const [touched, setTouched] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const cleanSku = sku.trim().toUpperCase()
+  const skuError = isNew && !/^[A-Z0-9]{9}[A-Z]?$/.test(cleanSku) ? t('err.sku') : ''
+  const modelError = !model.trim() ? t('err.model') : ''
+  const colorError = !color.trim() ? t('err.color') : ''
+  const hasError = Boolean(skuError || modelError || colorError)
+  const num = (v: string): number | undefined => {
+    const n = Number(v.replace(',', '.'))
+    return v.trim() !== '' && Number.isFinite(n) && n > 0 ? n : undefined
   }
+  const steps = [...new Set([...RULE_STEPS, ...(Number(rule) > 0 ? [Number(rule)] : [])])].sort((a, b) => a - b)
+  const setCarry = (on: boolean) => {
+    setCarryOver(on)
+    // Un carry-over n'est pas soldé : la règle suit, sauf si elle a été réglée à la main.
+    if (on && rule === '') setRule('0')
+    if (!on && rule === '0') setRule('')
+  }
+
+  const save = async () => {
+    setTouched(true)
+    if (hasError || busy) return
+    setBusy(true)
+    try {
+      const rrpMap = Object.fromEntries(rows.map((c) => [c, num(rrp[c] ?? '')]))
+      const whsMap = Object.fromEntries(rows.map((c) => [c, num(whs[c] ?? '')]))
+      const maxDiscountPct = rule === '' ? undefined : Number(rule)
+      if (isNew) {
+        const letter = cleanSku.length === 10 ? [cleanSku[9]] : []
+        await api.addProduct(zone, {
+          sku: cleanSku.slice(0, 9),
+          variants: letter,
+          model: model.trim(),
+          material: material.trim(),
+          color: color.trim(),
+          dept: extra.dept.trim(),
+          season: season.trim().toUpperCase(),
+          carryOver: carryOver || undefined,
+          maxDiscountPct,
+          rrp: Object.fromEntries(Object.entries(rrpMap).filter(([, v]) => v !== undefined)) as Record<string, number>,
+          wholesale: Object.fromEntries(Object.entries(whsMap).filter(([, v]) => v !== undefined)) as Record<string, number>,
+          ...Object.fromEntries(TEXT_FIELDS.filter((k) => k !== 'dept' && extra[k].trim()).map((k) => [k, extra[k].trim()])),
+        })
+        toast.show(t('toast.productAdded'))
+      } else {
+        const patch: Parameters<typeof api.updateProduct>[2] = {}
+        if (model.trim() !== initial.model) patch.model = model.trim()
+        if (material.trim() !== initial.material) patch.material = material.trim()
+        if (color.trim() !== initial.color) patch.color = color.trim()
+        if (season.trim().toUpperCase() !== initial.season) patch.season = season.trim().toUpperCase()
+        if (carryOver !== Boolean(initial.carryOver)) patch.carryOver = carryOver || undefined
+        if (maxDiscountPct !== initial.maxDiscountPct) patch.maxDiscountPct = maxDiscountPct
+        for (const k of TEXT_FIELDS) if (extra[k].trim() !== (initial[k] ?? '')) patch[k] = extra[k].trim()
+        const rrpPatch = Object.fromEntries(rows.filter((c) => rrpMap[c] !== initial.rrp[c]).map((c) => [c, rrpMap[c]]))
+        const whsPatch = Object.fromEntries(rows.filter((c) => whsMap[c] !== initial.wholesale[c]).map((c) => [c, whsMap[c]]))
+        if (Object.keys(rrpPatch).length) patch.rrp = rrpPatch as Record<string, number>
+        if (Object.keys(whsPatch).length) patch.wholesale = whsPatch as Record<string, number>
+        if (Object.keys(patch).length) await api.updateProduct(zone, initial.sku, patch)
+        toast.show(t('sProducts.saved'))
+      }
+      refresh()
+      onClose()
+    } catch (e) {
+      toast.show(e instanceof Error && e.message.includes('sku-exists') ? t('err.skuExists') : t('common.error'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const text = (id: string, label: string, value: string, set: (v: string) => void, error = '', props: { autoFocus?: boolean; placeholder?: string } = {}) => (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <input id={id} className="input" value={value} onChange={(e) => set(e.target.value)} aria-invalid={touched && Boolean(error)} {...props} />
+      {touched && error && <span className="error-text">{error}</span>}
+    </div>
+  )
+
   return (
-    <input
-      className={`cell-input${numeric ? ' num' : ''}${wide ? ' wide' : ''}`}
-      aria-label={label}
-      title={wide ? value : undefined}
-      inputMode={numeric ? 'decimal' : undefined}
-      value={draft ?? (editing ? value : (display ?? value))}
-      placeholder="—"
-      onFocus={() => setEditing(true)}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-        if (e.key === 'Escape') setDraft(null)
-      }}
-    />
+    <Drawer
+      title={isNew ? t('drawer.newProduct') : `${initial.model} ${initial.color}`}
+      subtitle={isNew ? undefined : t('label.sku', { value: initial.sku })}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-ghost" onClick={onClose}>
+            {t('common.cancel')}
+          </button>
+          <button className="btn btn-primary" onClick={save} disabled={busy}>
+            {t('common.save')}
+          </button>
+        </>
+      }
+    >
+      {isNew && (
+        <div className="field">
+          <label htmlFor="p-sku">{t('col.sku')}</label>
+          <input id="p-sku" className="input" value={sku} maxLength={10} onChange={(e) => setSku(e.target.value)} placeholder="CP0502429" aria-invalid={touched && Boolean(skuError)} autoFocus />
+          <span className="small muted">{t('field.skuHint')}</span>
+          {touched && skuError && <span className="error-text">{skuError}</span>}
+        </div>
+      )}
+      <div className="form-grid">
+        {text('p-model', t('col.model'), model, setModel, modelError)}
+        {text('p-color', t('col.color'), color, setColor, colorError)}
+        {text('p-material', t('col.material'), material, setMaterial)}
+        {text('p-season', t('col.season'), season, setSeason, '', { placeholder: 'AW26' })}
+      </div>
+      <label className="field check-row" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+        <input type="checkbox" checked={carryOver} onChange={(e) => setCarry(e.target.checked)} />
+        <b>{t('col.carryOver')}</b>
+      </label>
+      <div className="field">
+        <label htmlFor="p-rule">{t('col.rule')}</label>
+        <select id="p-rule" className="select" value={rule} onChange={(e) => setRule(e.target.value)}>
+          <option value="">{t('rule.unset')}</option>
+          <option value="0">{t('rule.none')}</option>
+          {steps.map((n) => (
+            <option key={n} value={String(n)}>
+              {n} %
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <span className="label">{t('sProducts.prices')}</span>
+        <div className="stack-sm">
+          {rows.map((cur) => (
+            <div key={cur} className="price-row">
+              <b>{cur}</b>
+              <input className="input num" inputMode="decimal" aria-label={`RRP ${cur}`} placeholder="RRP" value={rrp[cur] ?? ''} onChange={(e) => setRrp((r) => ({ ...r, [cur]: e.target.value }))} />
+              <input className="input num" inputMode="decimal" aria-label={`${t('col.wholesaleShort')} ${cur}`} placeholder={t('col.wholesaleShort')} value={whs[cur] ?? ''} onChange={(e) => setWhs((r) => ({ ...r, [cur]: e.target.value }))} />
+            </div>
+          ))}
+          <div className="row" style={{ alignItems: 'center' }}>
+            <span className="small muted">{t('sProducts.addCurrency')}</span>
+            <CurrencySelect ariaLabel={t('sProducts.addCurrency')} value="" onChange={(c) => c && setMore((m) => [...m, c])} />
+          </div>
+        </div>
+      </div>
+      <details className="field">
+        <summary className="label" style={{ cursor: 'pointer' }}>{t('sProducts.details')}</summary>
+        <div className="form-grid" style={{ marginTop: 8 }}>
+          {TEXT_FIELDS.map((k) => text(`p-${k}`, t(`col.${k}` as const), extra[k], (v) => setExtra((e) => ({ ...e, [k]: v })), ''))}
+        </div>
+      </details>
+    </Drawer>
   )
 }

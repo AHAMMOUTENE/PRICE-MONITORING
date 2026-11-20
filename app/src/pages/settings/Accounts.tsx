@@ -6,7 +6,7 @@ import { ImportDrawer } from '../../components/ImportDrawer'
 import { useToast } from '../../components/toast'
 import { AccountLogo, Card, Drawer, Empty, ErrorBlock, LoadingBlock, PageHeader, Pill } from '../../components/ui'
 import { refresh, useQuery, useZone } from '../../lib/app'
-import { formatShortDate } from '../../lib/format'
+import { formatDateTime, formatShortDate } from '../../lib/format'
 import { useT } from '../../lib/i18n'
 import { navigate, useRoute } from '../../lib/router'
 import { sortBy, SortTh, useSort } from '../../lib/sort'
@@ -24,7 +24,6 @@ export function AccountsSettings() {
   const { t } = useT()
   const { zone } = useZone()
   const { params } = useRoute()
-  const toast = useToast()
   const list = useQuery(() => api.listRetailers(zone), [zone])
   const [q, setQ] = useState('')
   const [editing, setEditing] = useState<Retailer | null>(null)
@@ -195,7 +194,6 @@ export function AccountsSettings() {
           hint={t('import.accountsHint')}
           template="accounts"
           onPreview={(f) => api.previewRetailerImport(f, zone)}
-          onDone={(n) => toast.show(t('toast.imported', { n }))}
           onClose={() => setImporting(false)}
         />
       )}
@@ -208,40 +206,18 @@ export function AccountsSettings() {
 function ScanLine() {
   const { t } = useT()
   const { zone } = useZone()
-  const toast = useToast()
   const week = useQuery(() => api.getWeek(zone), [zone])
-  const [scan, setScan] = useState<{ done: number; total: number } | null>(null)
-
-  const run = async () => {
-    setScan({ done: 0, total: 0 })
-    await api.startScan(zone, (done, total) => setScan({ done, total }))
-    setScan(null)
-    refresh()
-    toast.show(t('scan.done'))
-  }
-
   if (!week.data) return null
   return (
     <div className="scanline">
       <Icon name="clock" className="icon muted" />
       <span>
-        {t('scan.last')} : <b>{formatShortDate(week.data.weekOf)}</b> · {t('scan.next')} : <b>{formatShortDate(week.data.nextScan)}</b>
+        {t('scan.last')} : <b>{week.data.lastScan?.at ? formatDateTime(week.data.lastScan.at) : t('scan.never')}</b> · {t('scan.next')} : <b>{formatShortDate(week.data.nextScan)}</b>
       </span>
       <span className="spacer" />
-      {scan ? (
-        <>
-          <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={scan.total} aria-valuenow={scan.done} aria-label={t('scan.running')}>
-            <div style={{ width: `${scan.total ? (scan.done / scan.total) * 100 : 0}%` }} />
-          </div>
-          <span>
-            {scan.done} / {scan.total}
-          </span>
-        </>
-      ) : (
-        <button className="btn btn-secondary btn-sm" onClick={run}>
-          <Icon name="refresh" /> {t('scan.run')}
-        </button>
-      )}
+      <a className="textlink" href="#/scanner">
+        {t('nav.scan')}
+      </a>
     </div>
   )
 }

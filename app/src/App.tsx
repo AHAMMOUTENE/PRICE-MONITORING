@@ -12,6 +12,7 @@ import { History } from './pages/History'
 import { Identify } from './pages/Identify'
 import { Notifications } from './pages/Notifications'
 import { Product } from './pages/Product'
+import { Scan } from './pages/Scan'
 import { Products } from './pages/Products'
 import { AccountsSettings } from './pages/settings/Accounts'
 import { CalendarSettings } from './pages/settings/Calendar'
@@ -26,6 +27,7 @@ function Routes() {
   if (path.startsWith('/produits/')) return <Product />
   if (path === '/produits') return <Products />
   if (path === '/historique') return <History />
+  if (path === '/scanner') return <Scan />
   if (path === '/reglages/produits') return <ProductsSettings />
   if (path === '/reglages/calendrier') return <CalendarSettings />
   if (path.startsWith('/reglages')) return <AccountsSettings />

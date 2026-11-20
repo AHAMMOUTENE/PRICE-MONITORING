@@ -1701,3 +1701,150 @@ select.cell-filter {
   .side.is-collapsed .side-userbar { flex-direction: column; gap: 4px; }
   .side.is-collapsed .side-userbar .side-user { flex: none; }
 }
+
+/* Bouton de scan du tableau de bord : dernier scan, puis le bouton */
+.scanbtn { display: inline-flex; align-items: center; gap: var(--s3); }
+.scanbtn-last { white-space: nowrap; }
+.scanbtn-progress { display: inline-flex; align-items: center; gap: var(--s2); }
+.scanbtn-progress .progress { width: 120px; }
+@media (max-width: 700px) { .scanbtn-last { display: none; } }
+
+
+.linkbtn[disabled] { opacity: 0.4; cursor: default; text-decoration: none; }
+
+/* Filtre par saison des rapports */
+.seasonfilter { display: inline-flex; align-items: center; gap: var(--s2); }
+
+/* En-tête collé : avec des bordures fusionnées, le texte des lignes qui défilent apparaît entre les rangées de l'en-tête */
+.table-wrap .table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.table thead th {
+  background-clip: padding-box;
+}
+.table thead tr.head-titles th {
+  border-bottom: 0;
+}
+
+/* En-tête du tableau de bord : commandes de même hauteur que le sélecteur de semaine */
+.progress > span { display: block; height: 100%; background: var(--brand); transition: width 200ms linear; }
+.scanbox {
+  display: inline-flex;
+  align-items: stretch;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-size: var(--fs-sm);
+}
+.scanbox.is-running { align-items: center; gap: var(--s2); padding: 0 var(--s3); }
+.scanbox-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 var(--s3);
+  border-radius: var(--r-md) 0 0 var(--r-md);
+  font-weight: 650;
+  cursor: pointer;
+}
+.scanbox-btn:hover { background: var(--paper); }
+.scanbox-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; }
+.scanbox-btn .icon { color: var(--ink-3); }
+.scanbox-last {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--s3);
+  border-left: 1px solid var(--line-2);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.scanbtn-progress .progress { width: 90px; }
+.seasonfilter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-size: var(--fs-sm);
+}
+.seasonfilter:hover { border-color: var(--ink-3); }
+.seasonfilter:focus-within { outline: 3px solid var(--focus); outline-offset: 1px; }
+.seasonfilter-label { color: var(--ink-3); }
+.seasonfilter select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 650;
+  color: var(--ink);
+  padding: 0 18px 0 0;
+  cursor: pointer;
+  outline: none;
+}
+.seasonfilter-chev { position: absolute; right: 10px; width: 14px; height: 14px; color: var(--ink-3); pointer-events: none; }
+
+/* Fenêtre de confirmation */
+.dialog {
+  position: fixed;
+  z-index: 42;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(460px, calc(100vw - 32px));
+  padding: var(--s5);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+.dialog h2 { margin: 0 0 var(--s2); font-size: var(--fs-xl); }
+.dialog p { margin: 0 0 var(--s2); }
+
+
+/* Panneau produit : une ligne par devise (RRP, prix wholesale) */
+.price-row { display: grid; grid-template-columns: 44px 1fr 1fr; gap: var(--s2); align-items: center; }
+.table-edit tr.is-clickable { cursor: pointer; }
+
+/* Choix « ajouter ce qui manque / mettre à jour » : à côté du bouton d'import, toujours visible */
+.mode-pick { width: auto; max-width: 240px; font-weight: 650; }
+.drawer-foot { flex-wrap: wrap; align-items: center; }
+
+/* Fenêtre « ajouter ce qui manque ou mettre à jour » */
+.choice { display: flex; gap: var(--s3); align-items: flex-start; padding: var(--s3); border: 1.5px solid var(--line); border-radius: var(--r-md); cursor: pointer; }
+.choice.is-on { border-color: var(--brand); background: var(--brand-soft); }
+.choice input { margin-top: 3px; }
+.choice > span { display: flex; flex-direction: column; gap: 2px; }
+
+/* Dernier scan du tableau de bord : lecture seule, un clic mène à la page Scanner */
+.scanbox.is-link { align-items: center; text-decoration: none; color: inherit; cursor: pointer; }
+.scanbox.is-link:hover { border-color: var(--ink-3); }
+.scanbox-label { display: inline-flex; align-items: center; gap: 8px; padding: 0 var(--s3); font-weight: 650; }
+.scanbox-label .icon { color: var(--ink-3); }
+
+/* Notifications : e-mail après chaque scan, en haut de la page */
+.mailcard { background: var(--surface); border-radius: var(--card-radius); box-shadow: var(--card-shadow); padding: var(--s4) var(--s5); margin-bottom: var(--s4); }
+.mailcard-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s4); }
+.mailcard-text { display: flex; flex-direction: column; gap: 2px; }
+.mailcard-kinds { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s4); margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line-2); }
+.mailcard-kinds > .small:last-child { flex-basis: 100%; }
+
+/* Tableau de bord : ce qui reste à faire (identifier des produits, ajouter des sites) */
+.todo { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s4); background: var(--warn-soft); border-radius: var(--r-lg); padding: var(--s3) var(--s4); margin-bottom: var(--s4); }
+.todo-item { display: inline-flex; align-items: center; gap: var(--s2); text-decoration: none; color: inherit; }
+.todo-item .icon { color: var(--warn); }
+.todo-item em { font-style: normal; font-weight: 700; color: var(--brand); }
+.todo-item:hover em { text-decoration: underline; }
+
+/* Case à cocher avec son texte (fenêtre de scan, choix des e-mails) */
+.opt { display: flex; align-items: flex-start; gap: var(--s2); margin-top: var(--s2); cursor: pointer; }
+.opt input { margin-top: 3px; flex: none; accent-color: var(--brand); }
+.mailcard-kinds .opt { margin-top: 0; align-items: center; }
+.mailcard-kinds .opt input { margin-top: 0; }
+.notif-section { margin: var(--s5) 0 var(--s3); font-size: var(--fs-lg); }

@@ -93,6 +93,8 @@ create table zones (
   default_currency char(3) not null check (default_currency ~ '^[A-Z]{3}$'),
   timezone         text not null,                         -- fuseau du « lundi » et de l'heure de scan
   scan_time        time not null default '05:00',         -- heure locale du scan planifié
+  default_scan_days smallint[] not null default '{1}'     -- jours de scan hors soldes (1 = lundi … 7 = dimanche)
+                   check (default_scan_days <@ '{1,2,3,4,5,6,7}'::smallint[] and cardinality(default_scan_days) >= 1),
   current_season   text check (current_season ~ '^(SS|AW)[0-9]{2}$'),  -- saison de l'export (« AW26 »)
   credits_budget_month integer check (credits_budget_month >= 0),      -- plafond ScrapingBee indicatif
   created_at       timestamptz not null default now(),

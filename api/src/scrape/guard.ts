@@ -43,7 +43,7 @@ export function limitsFromEnv(env: Record<string, string | undefined>): Limits {
     maxConsecutiveFailures: n(env.MAX_CONSECUTIVE_FAILURES, 8),
     scanMaxMinutes: n(env.SCAN_MAX_MINUTES, 20),
     maxFetchesPerScan: n(env.MAX_FETCHES_PER_SCAN, 2_000),
-    maxLlmCallsPerScan: n(env.MAX_LLM_CALLS_PER_SCAN, 20),
+    maxLlmCallsPerScan: n(env.MAX_LLM_CALLS_PER_SCAN, 60),
   }
 }
 
@@ -51,7 +51,7 @@ export function limitsFromEnv(env: Record<string, string | undefined>): Limits {
 export async function checkCanCreate(db: { query: Db['query'] }, limits: Limits, zone: string): Promise<string | null> {
   if (!limits.enabled) return 'scans-disabled'
   const [r] = await db.query<{ recent: number; today: number }>(
-    `select count(*) filter (where created_at > now() - ($2 || ' minutes')::interval)::int as recent,
+    `select count(*) filter (where created_at > now() - ($2 || ' minutes')::interval and (credits_used > 0 or status in ('queued', 'running')))::int as recent,
             count(*) filter (where created_at > now() - interval '24 hours')::int as today
      from scans where zone_id = $1`,
     [zone, String(limits.scanCooldownMin)],

@@ -35,13 +35,13 @@ import type {
   ScanPlan,
   WeekOverview,
   WeekReport,
-  Zone,
-} from '../types'
+  Zone, ScanRecord, ProductSeries, ImportMode, ImportResult, HistoryExport, HistoryRow, ScanSchedule, EmailKind, EmailPrefs } from '../types'
 import { currencyFromUrl } from '../lib/currencies'
 import { ACCOUNT_COLUMNS, CATALOG_COLUMNS, mapColumns, parseAmount, prettyColor, priceColumns, readSheet, rrpColumns, seasonFromName, seasonalityOf, splitSku, UnsupportedFile, type Sheet } from '../lib/import-parse'
 import { ZONES, zoneInfo } from '../lib/zones'
 import { CATALOG, DEFAULT_RULES, OBSERVATIONS, RETAILERS, SALE_PERIODS, SEASON, WEEKS, addDays } from './mock-data'
 import { createHttpApi, makeRequest } from './http'
+import { getSeason } from '../lib/season'
 import { discountAt, discountLimit, reasonAt, toAnomaly } from './rules'
 import { countScanDays, isScanDay, isoWeekday } from './schedule'
 
@@ -72,6 +72,8 @@ export interface Api {
    * `rrp` est fusionné devise par devise (une valeur absente retire le prix de cette devise).
    */
   updateProduct(zone: Zone, sku: string, patch: Partial<Omit<CatalogItem, 'sku'>>): Promise<void>
+  /** Ajoute un seul produit à la main (même règles que l'import) ; refusé si le SKU existe déjà dans la zone. */
+  addProduct(zone: Zone, item: CatalogItem): Promise<void>
   listProducts(zone: Zone, week?: string): Promise<ProductRow[]>
   /** Un produit à travers ses comptes ; `week` (lundi) donne l'état de cette semaine-là, par défaut la plus récente. */
   getProduct(zone: Zone, sku: string, week?: string): Promise<ProductDetail | null>
@@ -88,17 +90,32 @@ export interface Api {
   previewRetailerImport(file: File, zone: Zone, options?: ImportOptions): Promise<ImportPreview>
   previewCatalogImport(file: File, zone: Zone, options?: ImportOptions): Promise<ImportPreview>
   /** Applique un fichier prévisualisé. Renvoie le nombre de lignes importées. */
-  commitImport(token: string): Promise<number>
+  commitImport(token: string, mode?: ImportMode): Promise<ImportResult>
   getRules(zone: Zone): Promise<Rules>
   saveRules(zone: Zone, rules: Rules): Promise<void>
   previewRules(zone: Zone, rules: Rules): Promise<{ confirmed: number; toReview: number; retailers: number }>
   listSalePeriods(zone: Zone): Promise<SalePeriod[]>
+  /** E-mail de récapitulatif après chaque scan de la zone : le choix de l'utilisateur connecté. */
+  getEmailPrefs(zone: Zone): Promise<EmailPrefs>
+  saveEmailPrefs(zone: Zone, prefs: { enabled?: boolean; kinds?: EmailKind[] }): Promise<void>
+  /** Rythme habituel des scans (hors soldes) : jours et heure. */
+  getScanSchedule(zone: Zone): Promise<ScanSchedule>
+  saveScanSchedule(zone: Zone, schedule: Pick<ScanSchedule, 'days' | 'time'>): Promise<void>
   addSalePeriod(p: Omit<SalePeriod, 'id'>): Promise<void>
   updateSalePeriod(id: string, p: Omit<SalePeriod, 'id' | 'zone'>): Promise<void>
   removeSalePeriod(id: string): Promise<void>
   /** Ce qu'un rythme de scan coûterait sur une période : scans et visites de sites de la zone. */
   estimateScans(zone: Zone, start: string, end: string, plan: ScanPlan): Promise<ScanEstimate>
-  startScan(zone: Zone, onProgress: (done: number, total: number) => void): Promise<void>
+  /** `force` : revisiter aussi les pages visitées avec succès depuis peu. */
+  startScan(zone: Zone, onProgress: (done: number, total: number) => void, options?: { force?: boolean }): Promise<void>
+  /** Avant de lancer : pages à visiter, pages visitées récemment (laissées de côté), et ce délai en heures. */
+  previewScan(zone: Zone): Promise<{ toVisit: number; recent: number; hours: number }>
+  /** Relit l'état de la zone sur le serveur (un scan a pu se terminer, un collègue a pu modifier). */
+  reloadZone(zone: Zone): Promise<void>
+  /** Historique des scans de la zone, du plus récent au plus ancien. */
+  listScans(zone: Zone): Promise<ScanRecord[]>
+  /** Historique des prix, retailer par retailer et produit par produit (pour l'export Excel). */
+  buildHistoryExport(zone: Zone): Promise<HistoryExport>
   /** Vue globale, lecture seule : chaque zone résumée, et les produits (par SKU) à travers les zones. */
   getGlobalOverview(): Promise<GlobalOverview>
   getGlobalProduct(sku: string): Promise<GlobalProductDetail | null>
@@ -241,7 +258,7 @@ function anomaliesFor(zone: Zone, weekIdx: number, rules: Rules = rulesFor(zone)
     const retailer = byId.get(raw.retailerId)
     if (!retailer || rules.excludedRetailerIds.includes(retailer.id)) continue
     const o = resolve(zone, raw)
-    if (!o) continue
+    if (!o || !inSeason(zone, o)) continue
     const a = toAnomaly(o, retailer, weekIdx, itemFor(zone, o))
     if (!a) continue
     if (a.proof === 'to-review' && a.candidate) {
@@ -261,9 +278,16 @@ function observationsFor(zone: Zone): { o: Observation; retailer: Retailer; sku:
     const retailer = byId.get(raw.retailerId)
     const o = retailer ? resolve(zone, raw) : null
     const sku = o ? (o.sku ?? o.candidate?.sku) : undefined
-    if (retailer && o && sku) out.push({ o, retailer, sku })
+    if (retailer && o && sku && inSeason(zone, o)) out.push({ o, retailer, sku })
   }
   return out
+}
+
+/** Filtre par saison des rapports : vrai si l'observation est dans la saison choisie (ou si aucune n'est choisie). */
+function inSeason(zone: Zone, o: Observation): boolean {
+  const season = getSeason()
+  if (!season) return true
+  return itemFor(zone, o)?.season === season
 }
 
 /** Le produit du catalogue auquel une observation est rattachée (SKU confirmé, sinon SKU proposé). */
@@ -301,7 +325,7 @@ function accountProductsFor(zone: Zone, retailerId: string, idx: number): Accoun
   for (const raw of OBSERVATIONS) {
     if (raw.retailerId !== retailerId) continue
     const o = resolve(zone, raw)
-    if (!o) continue
+    if (!o || !inSeason(zone, o)) continue
     const item = itemFor(zone, o)
     const an = rules.excludedRetailerIds.includes(retailer.id) ? null : toAnomaly(o, retailer, idx, item)
     const proposal =
@@ -343,7 +367,7 @@ function buildRows(zone: Zone, idx: number): RetailerWeekRow[] {
   const perWeek = WEEKS.map((_, i) => anomaliesFor(zone, i))
   const anomalies = perWeek[idx]
   const scanned = new Map<string, number>()
-  for (const o of OBSERVATIONS) if (byId.has(o.retailerId)) scanned.set(o.retailerId, (scanned.get(o.retailerId) ?? 0) + 1)
+  for (const o of OBSERVATIONS) if (byId.has(o.retailerId) && inSeason(zone, o)) scanned.set(o.retailerId, (scanned.get(o.retailerId) ?? 0) + 1)
 
   return inZone
     .map((r): RetailerWeekRow => {
@@ -374,12 +398,26 @@ function buildRows(zone: Zone, idx: number): RetailerWeekRow[] {
 }
 
 /** Prochain jour de scan après aujourd'hui : un jour de scan d'une période de soldes, sinon le lundi suivant. */
+const emailPrefs = new Map<Zone, { enabled: boolean; kinds: EmailKind[] }>()
+
+/** Rythme habituel de chaque zone (démonstration) : le lundi à 05:00. */
+const schedules = new Map<Zone, ScanSchedule>()
+const TIMEZONES: Record<Zone, string> = { EMEA: 'Europe/Paris', LATAM: 'America/Sao_Paulo', APAC: 'Australia/Sydney', NOAM: 'America/New_York' }
+function scheduleOf(zone: Zone): ScanSchedule {
+  let s = schedules.get(zone)
+  if (!s) {
+    s = { days: [1], time: '05:00', timezone: TIMEZONES[zone] }
+    schedules.set(zone, s)
+  }
+  return s
+}
+
 function nextScanDate(zone: Zone): string {
   const periods = salePeriods.filter((p) => p.zone === zone)
   for (let i = 1; i <= 120; i++) {
     const d = addDays(TODAY, i)
     const p = periods.find((x) => x.start <= d && d <= x.end)
-    if (p ? isScanDay(d, p.scan) : isoWeekday(d) === 1) return d
+    if (p ? isScanDay(d, p.scan) : scheduleOf(zone).days.includes(isoWeekday(d))) return d
   }
   return addDays(TODAY, 7)
 }
@@ -403,6 +441,7 @@ export const mockApi: Api = {
       retailersInAnomaly: rows.filter((r) => r.confirmed > 0).length,
       deltaConfirmed: previous ? confirmed - previous.filter((a) => a.proof === 'confirmed').length : null,
       nextScan: nextScanDate(zone),
+      lastScan: lastScans.get(zone) ?? null,
       currentSale: sales.find((p) => p.start <= TODAY && TODAY <= p.end) ?? null,
       retailers: rows,
     })
@@ -461,15 +500,18 @@ export const mockApi: Api = {
       })()
       const base = { retailerId: r.retailer.id, retailerName: r.retailer.name, weeks }
       if (r.status === 'excluded') continue
+      // Tâches (sous « À faire ») : ajouter le site d'un retailer, identifier ses produits.
       if (r.status === 'no-site') {
         alerts.push({ ...base, id: `${r.retailer.id}:site`, kind: 'site-missing', products: 0 })
         continue
       }
-      if (r.toReview > 0) alerts.push({ ...base, id: `${r.retailer.id}:review`, kind: 'to-review', products: r.toReview })
+      if (r.toReview > 0) alerts.push({ ...base, id: `${r.retailer.id}:identify`, kind: 'to-review', products: r.toReview })
+      // Un retailer est « à revoir » dès qu'un produit confirmé dépasse la remise autorisée.
+      if (r.confirmed > 0) alerts.push({ ...base, id: `${r.retailer.id}:review`, kind: 'review', products: r.confirmed, maxDiscountPct: r.worstDiscountPct })
       const gap = recurrenceGap(r.trend)
-      if (gap !== undefined) alerts.push({ ...base, id: `${r.retailer.id}:recurrence`, kind: 'recurrence', products: r.confirmed, gapWeeks: gap })
+      if (gap !== undefined) alerts.push({ ...base, id: `${r.retailer.id}:recurrence`, kind: 'recurrence', products: r.confirmed, gapWeeks: gap, maxDiscountPct: r.worstDiscountPct })
     }
-    const rank: Record<Alert['kind'], number> = { 'to-review': 0, recurrence: 1, 'site-missing': 2 }
+    const rank: Record<Alert['kind'], number> = { review: 0, recurrence: 1, 'to-review': 2, 'site-missing': 3 }
     alerts.sort((a, b) => rank[a.kind] - rank[b.kind] || b.products - a.products || a.retailerName.localeCompare(b.retailerName, 'fr'))
     return delay(alerts)
   },
@@ -520,6 +562,12 @@ export const mockApi: Api = {
     return delay(zoneCurrencies(zone), 30)
   },
 
+  async addProduct(zone, item) {
+    if (catalogFor(zone).some((c) => c.sku === item.sku)) throw new Error('sku-exists')
+    catalogFor(zone).push({ ...item })
+    return delay(undefined, 80)
+  },
+
   async updateProduct(zone, sku, patch) {
     const item = catalogFor(zone).find((c) => c.sku === sku)
     if (!item) return delay(undefined, 40)
@@ -565,14 +613,16 @@ export const mockApi: Api = {
       if (counted.length === 0) continue
       const flagged = counted.filter(({ o }) => reasonAt(o, idx, item))
       // Le pire cas : le compte le plus remisé, dans la devise de son site (les sites d'une zone peuvent différer).
-      const worst = counted.reduce((a, b) => (discountAt(b.o, idx) > discountAt(a.o, idx) ? b : a))
+      // Seules les fiches confirmées donnent le prix le plus bas et le nombre de revendeurs ; sans aucune, on montre la proposition.
+      const sure = counted.filter(({ o }) => o.proof === 'confirmed')
+      const worst = (sure.length ? sure : counted).reduce((a, b) => (discountAt(b.o, idx) > discountAt(a.o, idx) ? b : a))
       const currency = worst.o.currency
       rows.push({
         sku,
         item,
         currency,
         rrp: item.rrp[currency] ?? worst.o.rrp,
-        accounts: new Set(counted.map((x) => x.retailer.id)).size,
+        accounts: new Set(sure.map((x) => x.retailer.id)).size,
         lowest: worst.o.history[idx].price,
         worstDiscountPct: discountAt(worst.o, idx),
         anomalies: flagged.length,
@@ -589,31 +639,30 @@ export const mockApi: Api = {
     const list = observationsFor(zone).filter((x) => x.sku === sku)
     const item = catalogFor(zone).find((c) => c.sku === sku)
     if (!item || list.length === 0) return delay(null)
-    const count = new Map<Currency, number>()
-    for (const { o } of list) count.set(o.currency, (count.get(o.currency) ?? 0) + 1)
-    const currencies = [...count.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([c]) => c)
-    return delay({
-      item,
-      discountLimitPct: discountLimit(item),
-      currencies,
-      weeks: [...WEEKS],
-      series: list
-        .map(({ o, retailer }) => ({
-          retailerId: retailer.id,
-          retailerName: retailer.name,
-          currency: o.currency,
-          rrp: item.rrp[o.currency] ?? o.rrp,
-          points: o.history,
-          currentPrice: o.history[last].price,
-          discountPct: discountAt(o, last),
-          change: last > 0 ? Math.round((o.history[last].price - o.history[last - 1].price) * 100) / 100 : 0,
-          anomaly: !rules.excludedRetailerIds.includes(retailer.id) && reasonAt(o, last, item) !== null,
-          proof: o.proof,
-          url: o.url,
-        }))
-        // Les devises peuvent différer d'un compte à l'autre : on classe par remise, pas par prix.
-        .sort((a, b) => b.discountPct - a.discountPct || a.retailerName.localeCompare(b.retailerName, 'fr')),
+    const toSeries = ({ o, retailer }: { o: Observation; retailer: Retailer }): ProductSeries => ({
+      key: o.id,
+      title: o.title,
+      confidence: o.proof === 'to-review' ? o.candidate?.confidence : undefined,
+      retailerId: retailer.id,
+      retailerName: retailer.name,
+      currency: o.currency,
+      rrp: item.rrp[o.currency] ?? o.rrp,
+      points: o.history,
+      currentPrice: o.history[last].price,
+      discountPct: discountAt(o, last),
+      change: last > 0 ? Math.round((o.history[last].price - o.history[last - 1].price) * 100) / 100 : 0,
+      anomaly: !rules.excludedRetailerIds.includes(retailer.id) && reasonAt(o, last, item) !== null,
+      proof: o.proof,
+      url: o.url,
     })
+    // Les devises peuvent différer d'un revendeur à l'autre : on classe par remise, pas par prix.
+    const byDiscount = (a: ProductSeries, b: ProductSeries) => b.discountPct - a.discountPct || a.retailerName.localeCompare(b.retailerName, 'fr')
+    const confirmed = list.filter((x) => x.o.proof === 'confirmed').map(toSeries).sort(byDiscount)
+    const candidates = list.filter((x) => x.o.proof !== 'confirmed').map(toSeries).sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0) || a.retailerName.localeCompare(b.retailerName, 'fr'))
+    const count = new Map<Currency, number>()
+    for (const x of confirmed) count.set(x.currency, (count.get(x.currency) ?? 0) + 1)
+    const currencies = [...count.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([c]) => c)
+    return delay({ item, discountLimitPct: discountLimit(item), currencies, weeks: [...WEEKS], series: confirmed, candidates })
   },
 
   async listHistory(zone) {
@@ -638,7 +687,7 @@ export const mockApi: Api = {
 
     // Le fichier suit le format de l'entreprise, en anglais, quelle que soit la langue de l'interface.
     const detailHeader = [
-      'Week', 'Account', 'Segmentation', 'Sales rep', 'URL', 'Product', 'SKU', 'Model', 'Color', 'Season',
+      'Week', 'Retailer', 'Segmentation', 'Sales rep', 'URL', 'Product', 'SKU', 'Model', 'Color', 'Season',
       'Currency', 'RRP', 'Struck price', 'Site price', 'Observed discount',
       'Allowed discount', 'Reason', 'Proof', 'Consecutive weeks', 'First seen',
     ]
@@ -762,6 +811,7 @@ export const mockApi: Api = {
         recognized: [],
         warnings: missing ? [{ kind: 'noSite' as const, n: missing }] : [],
         canImport: true,
+        existing: rows.filter((r) => retailers.some((x) => x.zone === zone && x.name.toLowerCase() === r.name.toLowerCase())).length,
         sample: rows.map((r) => [r.name, r.website, r.currency, r.segmentation, r.reps.join(', ')]),
       },
       200,
@@ -861,16 +911,18 @@ export const mockApi: Api = {
         ],
         warnings,
         canImport: true,
+        existing: rows.filter((p) => catalogFor(zone).some((c) => c.sku === p.sku)).length,
         sample: rows.map((p) => [p.sku, p.model, p.material, p.color, `${p.season}${p.carryOver ? ' · C/O' : ''}`, p.rrp[currency] !== undefined ? `${p.rrp[currency]} ${currency}` : '']),
       },
       200,
     )
   },
 
-  async commitImport(token) {
+  async commitImport(token, mode = 'add') {
     const pending = pendingImports.get(token)
     if (!pending) throw new Error('import-expired') // jeton inconnu, déjà appliqué ou remplacé par un aperçu plus récent
     pendingImports.delete(token)
+    const result: ImportResult = { added: 0, updated: 0, unchanged: 0 }
     if (pending.kind === 'accounts') {
       const { defaultCurrency } = zoneInfo(pending.zone)
       for (const row of pending.rows) {
@@ -878,34 +930,32 @@ export const mockApi: Api = {
         // La devise du fichier est celle de la page du site ; sans devise, celle proposée par la zone.
         const site = row.website ? [{ currency: row.currency || defaultCurrency, url: row.website }] : []
         if (existing) {
-          // Réimporter met à jour sans effacer : les pages déjà saisies sont conservées.
-          const updated: Retailer = {
-            ...existing,
-            segmentation: row.segmentation || existing.segmentation,
-            salesReps: row.reps.length ? row.reps : existing.salesReps,
-            sites: existing.sites.length === 0 ? site : existing.sites,
+          // « ajouter » : seule la page manquante est ajoutée ; « mettre à jour » : segmentation et commerciaux du fichier remplacent les valeurs.
+          const gainsSite = existing.sites.length === 0 && site.length > 0
+          if (mode === 'add' && !gainsSite) {
+            result.unchanged++
+            continue
           }
-          retailers = retailers.map((r) => (r.id === existing.id ? updated : r))
+          const replace = mode === 'update'
+          retailers = retailers.map((r) =>
+            r.id === existing.id
+              ? { ...existing, segmentation: replace ? row.segmentation || existing.segmentation : existing.segmentation, salesReps: replace && row.reps.length ? row.reps : existing.salesReps, sites: gainsSite ? site : existing.sites }
+              : r,
+          )
+          result.updated++
         } else {
           retailers = [
             ...retailers,
-            {
-              id: `r-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              name: row.name,
-              zone: pending.zone,
-              tracked: true,
-              segmentation: row.segmentation,
-              salesReps: row.reps,
-              sites: site,
-            },
+            { id: `r-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name: row.name, zone: pending.zone, tracked: true, segmentation: row.segmentation, salesReps: row.reps, sites: site },
           ]
+          result.added++
         }
       }
-      return delay(pending.rows.length, 150)
+      return delay(result, 150)
     }
     for (const row of pending.rows) {
       const existing = catalogFor(pending.zone).find((c) => c.sku === row.sku)
-      if (existing) {
+      if (existing && mode === 'update') {
         existing.model = row.model || existing.model
         existing.material = row.material || existing.material
         existing.color = row.color || existing.color
@@ -917,6 +967,13 @@ export const mockApi: Api = {
         existing.wholesale = { ...existing.wholesale, ...row.wholesale }
         for (const [k, v] of Object.entries(row.extra) as [keyof typeof row.extra, string][]) if (v) existing[k] = v
         if (row.maxDiscountPct !== undefined) existing.maxDiscountPct = row.maxDiscountPct
+        result.updated++
+      } else if (existing) {
+        // « ajouter » : seuls les prix de devises absentes sont ajoutés ; le reste du produit n'est pas touché.
+        let completed = false
+        for (const [cur, v] of Object.entries(row.rrp)) if (existing.rrp[cur] === undefined && v !== undefined) ((existing.rrp[cur] = v), (completed = true))
+        for (const [cur, v] of Object.entries(row.wholesale)) if (existing.wholesale[cur] === undefined && v !== undefined) ((existing.wholesale[cur] = v), (completed = true))
+        result[completed ? 'updated' : 'unchanged']++
       } else {
         const extra = Object.fromEntries(Object.entries(row.extra).filter(([, v]) => v)) as typeof row.extra
         catalogFor(pending.zone).push({
@@ -933,9 +990,10 @@ export const mockApi: Api = {
           maxDiscountPct: row.maxDiscountPct,
           ...extra,
         })
+        result.added++
       }
     }
-    return delay(pending.rows.length, 150)
+    return delay(result, 150)
   },
 
   async getRules(zone) {
@@ -1032,6 +1090,67 @@ export const mockApi: Api = {
     return delay({ scans, sites, visits: scans * sites }, 30)
   },
 
+  async previewScan(zone) {
+    return delay({ toVisit: retailers.filter((r) => r.zone === zone && r.tracked).reduce((n, r) => n + r.sites.length, 0), recent: 0, hours: 6 }, 40)
+  },
+
+  async reloadZone() {},
+
+  async getEmailPrefs(zone) {
+    const p = emailPrefs.get(zone) ?? { enabled: false, kinds: ['review', 'recurrence', 'todo'] as EmailKind[] }
+    return delay({ ...p, kinds: [...p.kinds], configured: false }, 40)
+  },
+
+  async saveEmailPrefs(zone, prefs) {
+    const cur = emailPrefs.get(zone) ?? { enabled: false, kinds: ['review', 'recurrence', 'todo'] as EmailKind[] }
+    emailPrefs.set(zone, { enabled: prefs.enabled ?? cur.enabled, kinds: prefs.kinds ?? cur.kinds })
+    return delay(undefined, 40)
+  },
+
+  async getScanSchedule(zone) {
+    return delay({ ...scheduleOf(zone), days: [...scheduleOf(zone).days] }, 40)
+  },
+
+  async saveScanSchedule(zone, schedule) {
+    schedules.set(zone, { ...scheduleOf(zone), days: [...schedule.days].sort(), time: schedule.time })
+    return delay(undefined, 60)
+  },
+
+  async listScans() {
+    return delay([] as ScanRecord[], 60)
+  },
+
+  async buildHistoryExport(zone) {
+    const names = new Map(retailers.filter((r) => r.zone === zone).map((r) => [r.id, r]))
+    const rows: HistoryRow[] = []
+    for (const raw of OBSERVATIONS) {
+      const retailer = names.get(raw.retailerId)
+      if (!retailer) continue
+      const o = resolve(zone, raw)
+      if (!o) continue
+      const item = itemFor(zone, o)
+      rows.push({
+        retailer: retailer.name,
+        segmentation: retailer.segmentation,
+        salesReps: retailer.salesReps.join(', '),
+        title: o.title,
+        url: o.url,
+        sku: item?.sku ?? '',
+        model: item?.model ?? o.model,
+        color: item?.color ?? o.color,
+        season: item?.season ?? '',
+        proof: o.proof,
+        currency: o.currency,
+        rrp: item?.rrp[o.currency] ?? o.rrp ?? null,
+        allowedPct: item?.maxDiscountPct ?? null,
+        prices: o.history.map((p) => p.price),
+      })
+    }
+    rows.sort((a, b) => a.retailer.localeCompare(b.retailer, 'fr') || a.title.localeCompare(b.title, 'fr'))
+    // Démonstration : un relevé par semaine, présenté comme un scan du lundi.
+    return delay({ zone, scans: WEEKS.map((w) => `${w}T05:00:00Z`), rows }, 80)
+  },
+
   async startScan(zone, onProgress) {
     const total = scannable(zone).size
     for (let i = 1; i <= total; i++) {
@@ -1056,9 +1175,11 @@ interface RemoteState {
   comments: AccountComment[]
   activity: ActivityItem[]
   observations: Observation[]
+  lastScan?: { at: string; status: string; running: boolean } | null
 }
 
 const remoteActivity = new Map<Zone, ActivityItem[]>()
+const lastScans = new Map<Zone, { at: string; status: string; running: boolean } | null>()
 
 /** Remplace les données d'une zone par celles du serveur ; les écrans se recalculent à partir de là. */
 function hydrateZone(s: RemoteState): void {
@@ -1078,6 +1199,7 @@ function hydrateZone(s: RemoteState): void {
   ]
   rulesByZone.set(zone, { excludedRetailerIds: s.excludedRetailerIds })
   remoteActivity.set(zone, s.activity)
+  lastScans.set(zone, s.lastScan ?? null)
   activity = [...remoteActivity.values()].flat().sort((a, b) => b.at.localeCompare(a.at))
   decisions.clear()
 }

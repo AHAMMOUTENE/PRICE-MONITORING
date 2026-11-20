@@ -1,3 +1,4 @@
+import { CURRENCIES } from './currencies'
 import { downloadBlob } from './format'
 
 export type TemplateKind = 'accounts' | 'catalog'
@@ -7,9 +8,14 @@ export type TemplateKind = 'accounts' | 'catalog'
  * ceux du fichier de suivi « FOLLOW UP IMAGE ONLINE » pour les comptes, ceux de l'export catalogue pour les produits.
  * Deux lignes d'exemple montrent le format attendu.
  */
+/** Valeurs d'exemple placées dans la bonne colonne de devise, les autres restent vides. */
+function prices(rrp: Record<string, number>, wholesale: Record<string, number>): (number | string)[] {
+  return [...CURRENCIES.map((c) => rrp[c] ?? ''), ...CURRENCIES.map((c) => wholesale[c] ?? '')]
+}
+
 const TEMPLATES: Record<TemplateKind, { sheet: string; fileName: string; header: string[]; rows: (string | number)[][]; widths: number[] }> = {
   accounts: {
-    sheet: 'Accounts',
+    sheet: 'Retailers',
     fileName: 'template_accounts.xlsx',
     header: ['STORE NAME', 'STORE WEBSITE', 'CURRENCY', 'SEGMENTATION', 'SALES REP'],
     rows: [
@@ -21,12 +27,13 @@ const TEMPLATES: Record<TemplateKind, { sheet: string; fileName: string; header:
   catalog: {
     sheet: 'Catalog',
     fileName: 'template_catalog.xlsx',
-    header: ['SKU', 'MODEL', 'MATERIAL', 'COLOR', 'SEASON', 'MAX DISCOUNT %', 'RRP EUR', 'RRP GBP', 'RRP USD', 'WHOLESALE EUR'],
+    // Une colonne RRP et une colonne prix wholesale pour chaque devise : on ne remplit que celles qui servent.
+    header: ['SKU', 'MODEL', 'MATERIAL', 'COLOR', 'SEASON', 'MAX DISCOUNT %', ...CURRENCIES.map((c) => `RRP ${c}`), ...CURRENCIES.map((c) => `WHOLESALE ${c}`)],
     rows: [
-      ['CP0501215A', 'CAMPO', 'LEATHER (05)', 'Black white', 'C/O', 0, 140, 125, 165, 58.5],
-      ['EE4323079A', 'MONTANA', 'ROPE', 'Black', 'AW26', 20, 75, 65, 90, 31.5],
+      ['CP0501215A', 'CAMPO', 'LEATHER (05)', 'Black white', 'C/O', 0, ...prices({ EUR: 140, GBP: 125, USD: 165 }, { EUR: 58.5, GBP: 52, USD: 69 })],
+      ['EE4323079A', 'MONTANA', 'ROPE', 'Black', 'AW26', 20, ...prices({ EUR: 75, GBP: 65, USD: 90 }, { EUR: 31.5, GBP: 27, USD: 38 })],
     ],
-    widths: [14, 16, 18, 24, 10, 16, 10, 10, 10, 16],
+    widths: [14, 16, 18, 24, 10, 16, ...CURRENCIES.flatMap(() => [11]), ...CURRENCIES.flatMap(() => [15])],
   },
 }
 

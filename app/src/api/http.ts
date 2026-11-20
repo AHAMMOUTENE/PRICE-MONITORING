@@ -3,7 +3,7 @@
  * puis l'état de la zone est relu. Les lectures et les calculs d'écran restent ceux de l'application, sur l'état relu.
  */
 import type { Api } from './index'
-import type { AccountComment, CatalogItem, ReviewDecision, SalePeriod, SessionUser, Zone } from '../types'
+import type { AccountComment, CatalogItem, ImportResult, ReviewDecision, SalePeriod, SessionUser, Zone } from '../types'
 
 export interface RemoteHelpers {
   /** Relit l'état d'une zone et met l'application à jour. */
@@ -80,13 +80,13 @@ export function createHttpApi(base: string, mock: Api, h: RemoteHelpers): Api {
       return write(zone, () => request('DELETE', `/zones/${zone}/comments/${id}`))
     },
 
+    addProduct: (zone, item) => write(zone, () => request('POST', `/zones/${zone}/products`, item)),
     updateProduct: (zone, sku, patch: Partial<Omit<CatalogItem, 'sku'>>) => write(zone, () => request('PUT', `/zones/${zone}/products/${sku}`, patch)),
 
-    commitImport: async (token) => {
+    commitImport: async (token, mode = 'add') => {
       const pending = h.takePendingImport(token)
       if (!pending) throw new Error('import-expired')
-      const r = await write(pending.zone, () => request<{ imported: number }>('POST', `/zones/${pending.zone}/imports/${pending.kind}`, { fileName: 'import', rows: pending.rows }))
-      return r.imported
+      return write(pending.zone, () => request<ImportResult>('POST', `/zones/${pending.zone}/imports/${pending.kind}`, { fileName: 'import', mode, rows: pending.rows }))
     },
 
     addSalePeriod: (p: Omit<SalePeriod, 'id'>) => write(p.zone, () => request('POST', `/zones/${p.zone}/periods`, p)),
@@ -109,8 +109,18 @@ export function createHttpApi(base: string, mock: Api, h: RemoteHelpers): Api {
     },
 
     /** Lance un scan réel et suit son avancement ; les relevés arrivent à la fin. */
-    startScan: async (zone, onProgress) => {
-      const { id, total } = await request<{ id: string; total: number }>('POST', `/zones/${zone}/scans`)
+    listScans: (zone) => request('GET', `/zones/${zone}/scans`),
+    getEmailPrefs: (zone) => request('GET', `/zones/${zone}/email`),
+    saveEmailPrefs: (zone, prefs) => request('PUT', `/zones/${zone}/email`, prefs),
+    getScanSchedule: (zone) => request('GET', `/zones/${zone}/schedule`),
+    saveScanSchedule: (zone, schedule) => request('PUT', `/zones/${zone}/schedule`, schedule),
+    buildHistoryExport: (zone) => request('GET', `/zones/${zone}/exports/history`),
+
+    previewScan: (zone) => request('GET', `/zones/${zone}/scans/preview`),
+    reloadZone: (zone) => h.reload(zone),
+
+    startScan: async (zone, onProgress, options) => {
+      const { id, total } = await request<{ id: string; total: number }>('POST', `/zones/${zone}/scans`, options?.force ? { force: true } : {})
       onProgress(0, total)
       for (;;) {
         await new Promise((r) => setTimeout(r, 1500))

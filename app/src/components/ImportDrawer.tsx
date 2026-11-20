@@ -7,7 +7,7 @@ import { refresh } from '../lib/app'
 import { useT, type TKey } from '../lib/i18n'
 import { downloadTemplate, type TemplateKind } from '../lib/templates'
 import { useToast } from './toast'
-import type { CsvDelimiter, ImportOptions, ImportPreview } from '../types'
+import type { CsvDelimiter, ImportOptions, ImportPreview, ImportMode, ImportResult } from '../types'
 
 /**
  * Import d'un fichier Excel ou CSV : dépôt, aperçu, puis confirmation.
@@ -27,8 +27,8 @@ export function ImportDrawer({
   /** Quel modèle de fichier proposer au téléchargement. */
   template: TemplateKind
   onPreview: (file: File, options?: ImportOptions) => Promise<ImportPreview>
-  /** Appelé après l'import, avec le nombre de lignes importées. */
-  onDone: (imported: number) => void
+  /** Appelé après l'import, avec le détail (ajoutées, mises à jour, inchangées). L'interface affiche déjà le résumé. */
+  onDone?: (result: ImportResult) => void
   onClose: () => void
 }) {
   const { t } = useT()
@@ -41,6 +41,32 @@ export function ImportDrawer({
   const [options, setOptions] = useState<ImportOptions>({})
   const [seasonDraft, setSeasonDraft] = useState<string | null>(null)
   const [showAll, setShowAll] = useState(false)
+  const [mode, setMode] = useState<ImportMode>('add') // par défaut : on ajoute ce qui manque, sans écraser
+  const [confirming, setConfirming] = useState(false) // fenêtre « ajouter ce qui manque ou mettre à jour ? », ouverte au clic sur Importer
+
+  /** Applique le fichier et affiche le résumé. */
+  const run = async () => {
+    if (!preview) return
+    setBusy(true)
+    try {
+      const r = await api.commitImport(preview.token, mode)
+      refresh()
+      toast.show(
+        mode === 'update'
+          ? t('import.result.update', { updated: r.updated, added: r.added })
+          : r.added + r.updated === 0
+            ? t('import.result.none', { n: r.unchanged })
+            : t('import.result.add', { added: r.added, updated: r.updated, unchanged: r.unchanged }),
+      )
+      onDone?.(r)
+      onClose()
+    } catch {
+      toast.show(t('import.failed'))
+    } finally {
+      setBusy(false)
+      setConfirming(false)
+    }
+  }
 
   const take = async (f: File | undefined, next: ImportOptions = {}) => {
     if (!f) return
@@ -74,23 +100,7 @@ export function ImportDrawer({
             <button className="btn btn-ghost" onClick={reset}>
               {t('import.anotherFile')}
             </button>
-            <button
-              className="btn btn-primary"
-              disabled={!preview.canImport || busy}
-              onClick={async () => {
-                setBusy(true)
-                try {
-                  const n = await api.commitImport(preview.token)
-                  refresh()
-                  onDone(n)
-                  onClose()
-                } catch {
-                  toast.show(t('import.failed'))
-                } finally {
-                  setBusy(false)
-                }
-              }}
-            >
+            <button className="btn btn-primary" disabled={!preview.canImport || busy} onClick={() => ((preview.existing ?? 0) > 0 ? setConfirming(true) : void run())}>
               {busy ? (
                 <>
                   <span className="spinner" aria-hidden="true" /> {t('import.saving')}
@@ -139,7 +149,7 @@ export function ImportDrawer({
         </div>
       ) : null}
       {!preview && (
-        <div className="template-box">
+        <div className="template-box" data-tour="import-template">
           <Icon name="file" className="icon muted" />
           <span className="template-text">
             <b>{t('import.template')}</b>
@@ -161,6 +171,7 @@ export function ImportDrawer({
           <p>
             <b>{t('import.file', { file: preview.fileName, n: preview.rows })}</b>
           </p>
+
 
           {preview.sheets && preview.sheets.length > 1 && (
             <div className="delim">
@@ -314,6 +325,7 @@ export function ImportDrawer({
         </div>
       )}
       {preview && showAll && <AllRows preview={preview} onClose={() => setShowAll(false)} />}
+      {preview && confirming && <ImportChoice preview={preview} mode={mode} onMode={setMode} busy={busy} onCancel={() => setConfirming(false)} onConfirm={run} />}
     </Drawer>
   )
 }
@@ -366,6 +378,59 @@ function AllRows({ preview, onClose }: { preview: ImportPreview; onClose: () => 
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+/** Fenêtre ouverte au clic sur « Importer » quand le fichier contient des lignes déjà présentes : on ajoute ce qui manque, ou on remplace. */
+function ImportChoice({ preview, mode, onMode, busy, onCancel, onConfirm }: { preview: ImportPreview; mode: ImportMode; onMode: (m: ImportMode) => void; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const { t } = useT()
+  const existing = preview.existing ?? 0
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !busy && onCancel()
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [busy, onCancel])
+  const option = (value: ImportMode, label: string, hint: string, recommended = false) => (
+    <label className={`choice${mode === value ? ' is-on' : ''}`}>
+      <input type="radio" name="import-mode" checked={mode === value} onChange={() => onMode(value)} />
+      <span>
+        <b>{label}</b> {recommended && <small className="muted">({t('import.recommended')})</small>}
+        <span className="small muted">{hint}</span>
+      </span>
+    </label>
+  )
+  return createPortal(
+    <div className="modal-scrim" onClick={() => !busy && onCancel()}>
+      <div className="modal" style={{ maxWidth: 520 }} role="dialog" aria-modal="true" aria-label={t('import.confirmTitle', { n: preview.rows })} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <h2>{t('import.confirmTitle', { n: preview.rows })}</h2>
+            <p className="small muted">{t('import.modeHint', { n: existing, fresh: preview.rows - existing })}</p>
+          </div>
+        </div>
+        <div className="modal-body stack-sm">
+          {option('add', t('import.mode.add'), t('import.mode.addHint'), true)}
+          {option('update', t('import.mode.update'), t('import.mode.updateHint'))}
+        </div>
+        <div className="drawer-foot">
+          <button className="btn btn-ghost" onClick={onCancel} disabled={busy}>
+            {t('common.cancel')}
+          </button>
+          <button className="btn btn-primary" onClick={onConfirm} disabled={busy} autoFocus>
+            {busy ? (
+              <>
+                <span className="spinner" aria-hidden="true" /> {t('import.saving')}
+              </>
+            ) : mode === 'add' ? (
+              t('import.mode.add')
+            ) : (
+              t('import.mode.update')
+            )}
+          </button>
         </div>
       </div>
     </div>,

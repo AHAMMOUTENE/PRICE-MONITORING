@@ -6,9 +6,11 @@
 import { Hono, type Context } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import type { Db, Sql } from './db.ts'
+import { ts } from './db.ts'
+import { limitsFromEnv } from './scrape/guard.ts'
 import { createScan, loadEvalContext, runScan, writeEvaluation, type ScanDeps } from './scrape/scan.ts'
-import { canonicalUrl } from './scrape/match.ts'
-import { buildState, fetchRetailers } from './state.ts'
+import { EMAIL_KINDS } from './recap.ts'
+import { buildHistoryExport, buildState, fetchRetailers } from './state.ts'
 import { readSession, SESSION_COOKIE, signSession } from './session.ts'
 import { HttpError, SKU_RE } from './util.ts'
 
@@ -223,8 +225,15 @@ export function createApp(deps: AppDeps) {
     const p = await json<Record<string, any>>(c)
     const user = c.get('user')
     await db.tx(async (q) => {
-      const [prod] = await q.query<{ id: string }>("select id from products where zone_id = $1 and sku = $2 and status = 'active'", [zone, sku])
-      if (!prod) throw new HttpError(404, 'product-unknown')
+      // Chaque zone a son catalogue : la modification ne concerne que le produit de cette zone.
+      const rows = await q.query<{ id: string; zone_id: string }>("select id, zone_id from products where zone_id = $1 and sku = $2 and status = 'active'", [zone, sku])
+      if (!rows.length) throw new HttpError(404, 'product-unknown')
+      for (const prod of rows) await patchProduct(q, prod.id, prod.zone_id)
+    })
+    return c.body(null, 204)
+
+    async function patchProduct(q: Sql, id: string, zoneId: string) {
+      const prod = { id }
       const sets: string[] = []
       const params: unknown[] = [prod.id]
       const add = (col: string, v: unknown) => {
@@ -259,12 +268,11 @@ export function createApp(deps: AppDeps) {
             await q.query(
               `insert into product_prices (product_id, zone_id, currency, kind, amount, source, updated_by) values ($1, $2, $3, $4::price_kind, $5, 'manual', $6)
                on conflict (product_id, currency, kind) do update set amount = excluded.amount, source = 'manual', updated_by = excluded.updated_by, updated_at = now()`,
-              [prod.id, zone, cur, kind, Number(v), user.email],
+              [prod.id, zoneId, cur, kind, Number(v), user.email],
             )
         }
       }
-    })
-    return c.body(null, 204)
+    }
   })
 
   // ── Imports (le fichier est lu dans le navigateur ; l'API reçoit les lignes validées) ──
@@ -272,11 +280,17 @@ export function createApp(deps: AppDeps) {
     const zone = await zoneOf(c, 'editor')
     const kind = c.req.param('kind')
     if (kind !== 'accounts' && kind !== 'catalog') throw new HttpError(404, 'import-unknown')
-    const b = await json<{ fileName?: string; sheet?: string; delimiter?: string; season?: string; noDiscount?: boolean; fileColumns?: string[]; mapping?: unknown; skipped?: number; rows: any[] }>(c)
+    const b = await json<{ mode?: string; fileName?: string; sheet?: string; delimiter?: string; season?: string; noDiscount?: boolean; fileColumns?: string[]; mapping?: unknown; skipped?: number; rows: any[] }>(c)
     if (!Array.isArray(b.rows) || !b.rows.length || b.rows.length > 20_000) throw new HttpError(422, 'rows-invalid')
     const user = c.get('user')
-    const count = await db.tx(async (q) => {
-      const n = kind === 'accounts' ? await importAccounts(q, zone, b.rows, user.email) : await importCatalog(q, zone, b.rows, user.email)
+    const mode: ImportMode = b.mode === 'update' ? 'update' : 'add'
+    let result: ImportResult = { added: 0, updated: 0, unchanged: 0 }
+    await db.tx(async (q) => {
+      // Un catalogue par zone : les produits, leurs prix (même ceux des autres devises) et leurs remises autorisées sont propres à la zone.
+      // Mode « add » (par défaut) : on ajoute ce qui manque, sans toucher à l'existant. Mode « update » : les valeurs du fichier remplacent celles de la base.
+      // Dans les deux cas, rien n'est jamais supprimé.
+      result = kind === 'accounts' ? await importAccounts(q, zone, b.rows, user.email, mode) : await importCatalog(q, zone, b.rows, user.email, mode)
+      const n = result.added + result.updated
       await q.query(
         `insert into imports (zone_id, kind, status, file_name, sheet, delimiter, season, no_discount, file_columns, mapping, rows_read, rows_skipped, rows_committed, created_by, committed_at)
          values ($1, $2::import_kind, 'committed', $3, $4, $5, $6, $7, array(select jsonb_array_elements_text($8::text::jsonb)), $9::text::jsonb, $10, $11, $12, $13, now())`,
@@ -284,7 +298,24 @@ export function createApp(deps: AppDeps) {
       )
       return n
     })
-    return c.json({ imported: count })
+    return c.json(result)
+  })
+
+  // Ajout d'un seul produit à la main : même règles que l'import (SKU de 9 caractères), refusé s'il existe déjà dans la zone.
+  app.post('/api/zones/:zone/products', async (c) => {
+    const zone = await zoneOf(c, 'editor')
+    const b = await json<Record<string, any>>(c)
+    const raw = String(b.sku ?? '').trim().toUpperCase()
+    const sku = raw.slice(0, 9)
+    if (!SKU_RE.test(sku) || raw.length > 10) throw new HttpError(422, 'sku-invalid')
+    if (!String(b.model ?? '').trim() || !String(b.color ?? '').trim()) throw new HttpError(422, 'product-invalid')
+    const letter = raw.length === 10 && /^[A-Z]$/.test(raw[9]) ? [raw[9]] : []
+    const user = c.get('user')
+    const result = await db.tx((q) =>
+      importCatalog(q, zone, [{ sku, variants: letter, model: String(b.model).trim(), material: String(b.material ?? '').trim(), color: String(b.color).trim(), dept: String(b.dept ?? '').trim(), season: String(b.season ?? '').trim().toUpperCase(), carryOver: Boolean(b.carryOver), maxDiscountPct: b.maxDiscountPct === null || b.maxDiscountPct === undefined ? undefined : Number(b.maxDiscountPct), rrp: b.rrp ?? {}, wholesale: b.wholesale ?? {} }], user.email, 'add'),
+    )
+    if (result.added !== 1) throw new HttpError(409, 'sku-exists')
+    return c.body(null, 201)
   })
 
   // ── Calendrier des soldes ──
@@ -320,16 +351,93 @@ export function createApp(deps: AppDeps) {
     return c.body(null, 204)
   })
 
+  // ── E-mail après chaque scan de la zone : choix de chaque utilisateur (désactivé par défaut) ──
+  app.get('/api/zones/:zone/email', async (c) => {
+    const zone = await zoneOf(c)
+    const email = c.get('user').email
+    const [on] = await db.query<{ enabled: boolean }>('select exists (select 1 from user_email_zones where user_email = $1 and zone_id = $2) as enabled', [email, zone])
+    const [p] = await db.query<{ kinds: string[] | null }>("select ui->'emailKinds' as kinds from user_preferences where user_email = $1", [email])
+    const kinds = Array.isArray(p?.kinds) ? p.kinds.filter((k) => (EMAIL_KINDS as readonly string[]).includes(k)) : [...EMAIL_KINDS]
+    return c.json({ enabled: on.enabled, kinds, configured: Boolean(deps.mailer) })
+  })
+  app.put('/api/zones/:zone/email', async (c) => {
+    const zone = await zoneOf(c)
+    const email = c.get('user').email
+    const b = await json<{ enabled?: boolean; kinds?: string[] }>(c)
+    const kinds = b.kinds === undefined ? undefined : [...new Set(b.kinds)].filter((k) => (EMAIL_KINDS as readonly string[]).includes(k))
+    await db.tx(async (q) => {
+      await q.query('insert into user_preferences (user_email) values ($1) on conflict (user_email) do nothing', [email])
+      if (kinds) await q.query("update user_preferences set ui = jsonb_set(coalesce(ui, '{}'::jsonb), '{emailKinds}', $2::text::jsonb) where user_email = $1", [email, JSON.stringify(kinds)])
+      if (b.enabled === true) await q.query('insert into user_email_zones (user_email, zone_id) values ($1, $2) on conflict do nothing', [email, zone])
+      if (b.enabled === false) await q.query('delete from user_email_zones where user_email = $1 and zone_id = $2', [email, zone])
+      await q.query("update user_preferences set email_frequency = (case when exists (select 1 from user_email_zones where user_email = $1) then 'each-scan' else 'off' end)::email_frequency where user_email = $1", [email])
+    })
+    return c.body(null, 204)
+  })
+
+  // ── Rythme habituel des scans (hors périodes de soldes) : jours et heure locale de la zone ──
+  app.get('/api/zones/:zone/schedule', async (c) => {
+    const zone = await zoneOf(c)
+    const [z] = await db.query<{ days: number[]; time: string; timezone: string }>("select default_scan_days as days, to_char(scan_time, 'HH24:MI') as time, timezone from zones where id = $1", [zone])
+    return c.json(z)
+  })
+  app.put('/api/zones/:zone/schedule', async (c) => {
+    const zone = await zoneOf(c, 'editor')
+    const b = await json<{ days: number[]; time: string }>(c)
+    const days = [...new Set((b.days ?? []).map(Number))].filter((d) => Number.isInteger(d) && d >= 1 && d <= 7).sort()
+    if (days.length === 0 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(b.time))) throw new HttpError(422, 'schedule-invalid')
+    await db.query('update zones set default_scan_days = array(select jsonb_array_elements_text($2::text::jsonb)::smallint), scan_time = $3::time where id = $1', [zone, JSON.stringify(days), b.time])
+    return c.body(null, 204)
+  })
+
   // ── Scans ──
   app.post('/api/zones/:zone/scans', async (c) => {
     const zone = await zoneOf(c, 'editor')
     if (!deps.fetcher) throw new HttpError(422, 'scraping-not-configured')
-    const scan = await createScan(deps, zone, { trigger: 'manual', requestedBy: c.get('user').email })
+    // Corps facultatif : { force: true } revisite aussi les pages déjà visitées avec succès depuis peu.
+    const body = (await c.req.json().catch(() => ({}))) as { force?: unknown }
+    const scan = await createScan(deps, zone, { trigger: 'manual', requestedBy: c.get('user').email, force: body.force === true })
     if (!scan) throw new HttpError(409, 'scan-running')
     if (scan.sites === 0) {
       await db.query("update scans set status = 'done', started_at = now(), finished_at = now() where id = $1", [scan.id])
     } else if (!deps.deferScans) background(runScan(deps, scan.id))
     return c.json({ id: scan.id, total: scan.sites }, 202)
+  })
+  // Export de l'historique : retailers × produits, un prix par semaine depuis le premier scan.
+  app.get('/api/zones/:zone/exports/history', async (c) => {
+    const zone = await zoneOf(c)
+    return c.json(await buildHistoryExport(db, zone))
+  })
+
+  // Historique des scans de la zone, du plus récent au plus ancien.
+  app.get('/api/zones/:zone/scans', async (c) => {
+    const zone = await zoneOf(c)
+    const rows = await db.query(
+      `select s.id, s.trigger_kind::text as trigger, s.status::text as status, ${ts('s.created_at')} as "createdAt", ${ts('s.finished_at')} as "finishedAt",
+              s.sites_total as total, s.sites_done + s.sites_failed as done, s.sites_failed as failed,
+              (select count(*)::int from scan_sites x where x.scan_id = s.id and x.status = 'skipped') as skipped,
+              (select count(*)::int from scan_sites x where x.scan_id = s.id and x.status = 'skipped' and x.error = 'recent') as "skippedRecent",
+              s.listings_seen as seen, s.credits_used as credits, s.cost_estimate::float8 as cost,
+              coalesce(u.display_name, '') as by, s.error
+       from scans s left join users u on u.email = s.requested_by
+       where s.zone_id = $1 order by s.created_at desc limit 50`,
+      [zone],
+    )
+    return c.json(rows)
+  })
+  // Avant de lancer : combien de pages seraient visitées, et combien l'ont été avec succès depuis peu.
+  app.get('/api/zones/:zone/scans/preview', async (c) => {
+    const zone = await zoneOf(c)
+    const hours = limitsFromEnv(env).siteCooldownHours
+    const [r] = await db.query<{ recent: number; to_visit: number }>(
+      `select (count(*) filter (where recent))::int as recent, (count(*) filter (where not recent))::int as to_visit from (
+         select exists (select 1 from scan_sites x where x.site_id = s.id and x.status = 'ok' and x.finished_at > now() - ($2 || ' hours')::interval) as recent
+         from account_sites s join accounts a on a.id = s.account_id
+         where s.zone_id = $1 and s.enabled and a.status = 'active' and a.tracked
+       ) q`,
+      [zone, String(hours)],
+    )
+    return c.json({ toVisit: r.to_visit, recent: r.recent, hours })
   })
   app.get('/api/zones/:zone/scans/:id', async (c) => {
     const zone = await zoneOf(c)
@@ -398,9 +506,19 @@ interface ImportedAccount {
   segmentation: string
   reps: string[]
 }
-async function importAccounts(q: Sql, zone: string, rows: ImportedAccount[], email: string): Promise<number> {
+type ImportMode = 'add' | 'update'
+interface ImportResult {
+  /** Lignes du fichier absentes de la base, créées. */
+  added: number
+  /** Lignes déjà présentes qui ont été complétées (mode « ajouter ») ou remplacées (mode « mettre à jour »). */
+  updated: number
+  /** Lignes déjà présentes, laissées telles quelles. */
+  unchanged: number
+}
+
+async function importAccounts(q: Sql, zone: string, rows: ImportedAccount[], email: string, mode: ImportMode): Promise<ImportResult> {
   const [z] = await q.query<{ default_currency: string }>('select default_currency::text as default_currency from zones where id = $1', [zone])
-  let n = 0
+  const result: ImportResult = { added: 0, updated: 0, unchanged: 0 }
   for (const row of rows) {
     const name = String(row.name ?? '').trim()
     if (!name) continue
@@ -409,27 +527,36 @@ async function importAccounts(q: Sql, zone: string, rows: ImportedAccount[], ema
     const reps = JSON.stringify(Array.isArray(row.reps) ? row.reps.map(String) : [])
     const [existing] = await q.query<{ id: string }>("select id from accounts where zone_id = $1 and lower(btrim(name)) = lower($2) and status = 'active'", [zone, name])
     let id = existing?.id
+    let changed = false
     if (id) {
-      // Réimporter met à jour sans effacer : segmentation et commerciaux seulement s'ils sont renseignés.
-      await q.query(
+      // Mode « mettre à jour » : segmentation et commerciaux du fichier remplacent ceux de la base, seulement s'ils sont renseignés.
+      if (mode === 'update') {
+        changed = true
+        await q.query(
         `update accounts set segmentation = coalesce(nullif($2, ''), segmentation),
            sales_reps = case when jsonb_array_length($3::text::jsonb) > 0 then array(select jsonb_array_elements_text($3::text::jsonb)) else sales_reps end, updated_by = $4 where id = $1::uuid`,
-        [id, row.segmentation ?? '', reps, email],
-      )
+          [id, row.segmentation ?? '', reps, email],
+        )
+      }
     } else {
       const [r] = await q.query<{ id: string }>(
         "insert into accounts (zone_id, name, segmentation, sales_reps, created_by, updated_by) values ($1, $2, $3, array(select jsonb_array_elements_text($4::text::jsonb)), $5, $5) returning id",
         [zone, name, row.segmentation ?? '', reps, email],
       )
       id = r.id
+      result.added++
     }
+    // Un compte qui n'a pas encore de page reçoit celle du fichier (dans les deux modes : c'est ce qui manque).
     if (URL_OK.test(website)) {
       const [has] = await q.query('select 1 from account_sites where account_id = $1::uuid limit 1', [id])
-      if (!has) await q.query('insert into account_sites (account_id, zone_id, currency, url, position) values ($1::uuid, $2, $3, $4, 0) on conflict do nothing', [id, zone, currency, website])
+      if (!has) {
+        await q.query('insert into account_sites (account_id, zone_id, currency, url, position) values ($1::uuid, $2, $3, $4, 0) on conflict do nothing', [id, zone, currency, website])
+        changed = true
+      }
     }
-    n++
+    if (existing) result[changed ? 'updated' : 'unchanged']++
   }
-  return n
+  return result
 }
 
 interface ImportedProduct {
@@ -446,7 +573,7 @@ interface ImportedProduct {
   maxDiscountPct?: number
   extra?: Record<string, string | undefined>
 }
-async function importCatalog(q: Sql, zone: string, rows: ImportedProduct[], email: string): Promise<number> {
+async function importCatalog(q: Sql, zone: string, rows: ImportedProduct[], email: string, mode: ImportMode): Promise<ImportResult> {
   // Un même SKU peut apparaître plusieurs fois (une ligne par taille) : on fusionne avant d'écrire.
   const merged = new Map<string, any>()
   for (const r of rows) {
@@ -470,14 +597,15 @@ async function importCatalog(q: Sql, zone: string, rows: ImportedProduct[], emai
     for (const [kind, map] of [['rrp', p.rrp], ['wholesale', p.wholesale]] as const)
       for (const [currency, amount] of Object.entries(map as Record<string, number>)) if (CUR_OK.test(currency) && amount > 0) prices.push({ sku: p.sku, currency, kind, amount })
   }
+  const newIds = new Set<string>()
   for (let i = 0; i < list.length; i += 400) {
-    await q.query(
+    const rowsDone = await q.query<{ id: string; inserted: boolean }>(
       `insert into products (zone_id, sku, variants, model, material, color, dept, season, carry_over, max_discount_pct, segmentation, color_code, description, composition, origin, ean, updated_by)
        select $1, x.sku, array(select jsonb_array_elements_text(coalesce(x.variants, '[]'::jsonb))), coalesce(x.model, ''), coalesce(x.material, ''), coalesce(x.color, ''), coalesce(x.dept, ''), coalesce(x.season, ''),
               coalesce(x."carryOver", false), x."maxDiscountPct", x.segmentation, x."colorCode", x.description, x.composition, x.origin, x.ean, $3
        from jsonb_to_recordset($2::text::jsonb) as x(sku text, variants jsonb, model text, material text, color text, dept text, season text, "carryOver" boolean, "maxDiscountPct" numeric,
                                                 segmentation text, "colorCode" text, description text, composition text, origin text, ean text)
-       on conflict (zone_id, sku) do update set
+       on conflict (zone_id, sku) ${mode === 'add' ? 'do nothing' : `do update set
          variants = (select coalesce(array_agg(distinct v order by v), '{}') from unnest(products.variants || excluded.variants) v),
          model = coalesce(nullif(excluded.model, ''), products.model), material = coalesce(nullif(excluded.material, ''), products.material),
          color = coalesce(nullif(excluded.color, ''), products.color), dept = coalesce(nullif(excluded.dept, ''), products.dept),
@@ -487,21 +615,28 @@ async function importCatalog(q: Sql, zone: string, rows: ImportedProduct[], emai
          segmentation = coalesce(excluded.segmentation, products.segmentation), color_code = coalesce(excluded.color_code, products.color_code),
          description = coalesce(excluded.description, products.description), composition = coalesce(excluded.composition, products.composition),
          origin = coalesce(excluded.origin, products.origin), ean = coalesce(excluded.ean, products.ean),
-         status = 'active', archived_at = null, updated_by = excluded.updated_by`,
-      [zone, JSON.stringify(list.slice(i, i + 400)), email, JSON.stringify(Object.fromEntries(list.filter((p) => p.carryOver !== undefined).map((p) => [p.sku, true])))],
+         status = 'active', archived_at = null, updated_by = excluded.updated_by`}
+       returning id, (xmax = 0) as inserted`,
+      // Le 4e paramètre (produits dont le fichier fixe le carry-over) ne sert que lorsqu'on remplace l'existant.
+      [zone, JSON.stringify(list.slice(i, i + 400)), email, ...(mode === 'update' ? [JSON.stringify(Object.fromEntries(list.filter((p) => p.carryOver !== undefined).map((p) => [p.sku, true])))] : [])],
     )
+    for (const r of rowsDone) if (r.inserted) newIds.add(r.id)
   }
+  const completed = new Set<string>() // produits déjà présents qui ont reçu des prix manquants
   for (let i = 0; i < prices.length; i += 2000) {
-    await q.query(
+    const done = await q.query<{ product_id: string }>(
       `insert into product_prices (product_id, zone_id, currency, kind, amount, source, updated_by)
        select p.id, p.zone_id, x.currency, x.kind::price_kind, x.amount, 'import', $3
        from jsonb_to_recordset($2::text::jsonb) as x(sku text, currency text, kind text, amount numeric)
        join products p on p.zone_id = $1 and p.sku = x.sku
-       on conflict (product_id, currency, kind) do update set amount = excluded.amount, source = 'import', updated_by = excluded.updated_by, updated_at = now()`,
+       on conflict (product_id, currency, kind) ${mode === 'add' ? 'do nothing' : "do update set amount = excluded.amount, source = 'import', updated_by = excluded.updated_by, updated_at = now()"}
+       returning product_id`,
       [zone, JSON.stringify(prices.slice(i, i + 2000)), email],
     )
+    for (const r of done) if (!newIds.has(r.product_id)) completed.add(r.product_id)
   }
-  return list.length
+  if (mode === 'update') return { added: newIds.size, updated: list.length - newIds.size, unchanged: 0 }
+  return { added: newIds.size, updated: completed.size, unchanged: Math.max(0, list.length - newIds.size - completed.size) }
 }
 
 // ───────────────────────── Décisions ─────────────────────────
@@ -510,6 +645,7 @@ interface ListingRow {
   id: string
   site_id: string
   url: string
+  url_key: string
   ean: string | null
   product_id: string | null
   candidate_product_id: string | null
@@ -517,7 +653,7 @@ interface ListingRow {
 }
 
 async function decide(q: Sql, email: string, zone: string, listingId: string, d: { kind: 'accepted' | 'corrected' | 'no-match'; sku?: string }) {
-  const [l] = await q.query<ListingRow>('select id, site_id, url, ean, product_id, candidate_product_id, status::text as status from listings where id = $1::uuid and zone_id = $2 for update', [listingId, zone])
+  const [l] = await q.query<ListingRow>('select id, site_id, url, url_key, ean, product_id, candidate_product_id, status::text as status from listings where id = $1::uuid and zone_id = $2 for update', [listingId, zone])
   if (!l) throw new HttpError(404, 'listing-unknown')
   let productId: string | null = null
   if (d.kind === 'accepted') {
@@ -553,7 +689,7 @@ async function decide(q: Sql, email: string, zone: string, listingId: string, d:
        on conflict (zone_id, kind, value, coalesce(site_id, '00000000-0000-0000-0000-000000000000'::uuid)) do update set verdict = excluded.verdict, product_id = excluded.product_id, decision_id = excluded.decision_id`,
       [zone, siteId, kind, value, productId ? 'product' : 'not-veja', productId, dec.id, email],
     )
-  await alias('url', canonicalUrl(l.url), l.site_id)
+  await alias('url', l.url_key, l.site_id)
   if (productId && l.ean) await alias('ean', l.ean, null)
   if (productId && obs) await writeEvaluation(q, await loadEvalContext(q, zone), { observationId: obs.id, zone, productId, proof: 'confirmed', price: obs.price, currency: obs.currency, excluded: obs.excluded, cause: 'decision', decisionId: dec.id })
 }

@@ -6,6 +6,7 @@ import { SeeMore } from '../components/SeeMore'
 import { AccountLogo, Card, CommentCell, Empty, ErrorBlock, KpiCard, LoadingBlock, PageHeader, Pill } from '../components/ui'
 import { ExportMenu } from '../components/ExportMenu'
 import { distinct, FilterSelect } from '../components/FilterSelect'
+import { SeasonFilter } from '../components/SeasonFilter'
 import { WeekPicker } from '../components/WeekPicker'
 import { refresh, useQuery, useZone } from '../lib/app'
 import { formatDiscount } from '../lib/format'
@@ -79,6 +80,7 @@ export function Accounts() {
         title={t('accounts.title')}
         actions={
           <>
+            <SeasonFilter />
             <WeekPicker stats={o.weekStats} value={o.weekOf} onChange={goWeek} />
             <ExportMenu weekOf={o.weekOf} weeks={o.weeks} />
           </>

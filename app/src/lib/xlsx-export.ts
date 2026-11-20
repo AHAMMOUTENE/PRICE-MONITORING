@@ -1,4 +1,4 @@
-import type { ExportData } from '../types'
+import type { ExportData, HistoryExport } from '../types'
 import { downloadBlob } from './format'
 
 const PINK = 'FFF6D9EC'
@@ -85,4 +85,44 @@ export async function downloadWorkbook(data: ExportData): Promise<void> {
     data.fileName,
     new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
   )
+}
+
+
+/**
+ * Historique des prix en Excel : une ligne par retailer et produit, puis un prix par scan, puis la remise par rapport au RRP.
+ * Il couvre tous les scans depuis le premier, sans filtre de saison. Filtrable (retailer, SKU, saison, statut) ; les scans où la fiche n'a pas été vue restent vides.
+ */
+export async function downloadHistory(data: HistoryExport, fileName: string): Promise<void> {
+  const ExcelJS = (await import('exceljs')).default
+  const wb = new ExcelJS.Workbook()
+  wb.creator = 'VEJA – Suivi des prix'
+  const ws = wb.addWorksheet('Price history')
+  const base = ['Retailer', 'Segmentation', 'Sales rep', 'Page title', 'SKU', 'Model', 'Color', 'Season', 'Status', 'Currency', 'RRP', 'Allowed discount']
+  // Une colonne par scan, du premier au dernier : « 2026-11-20 12:39 ».
+  const label = (iso: string) => new Date(iso).toLocaleString('sv-SE').slice(0, 16)
+  const head = [...base, ...data.scans.map((a) => `Price ${label(a)}`), ...data.scans.map((a) => `Discount ${label(a)}`)]
+  const headerRow = ws.addRow(head)
+  headerRow.font = { bold: true }
+  headerRow.eachCell((c) => {
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: PINK } }
+    c.border = BORDER
+    c.alignment = { wrapText: true, vertical: 'middle' }
+  })
+  headerRow.height = 32
+  for (const r of data.rows) {
+    const discounts = r.prices.map((p) => (p !== null && r.rrp ? Math.max(0, 1 - p / r.rrp) : null))
+    const row = ws.addRow([r.retailer, r.segmentation, r.salesReps, r.title, r.sku, r.model, r.color, r.season, r.proof === 'confirmed' ? 'Confirmed' : 'To check', r.currency, r.rrp, r.allowedPct === null ? '' : r.allowedPct / 100, ...r.prices, ...discounts])
+    row.getCell(11).numFmt = '0.00'
+    row.getCell(12).numFmt = '0%'
+    data.scans.forEach((_, i) => {
+      row.getCell(base.length + 1 + i).numFmt = '0.00'
+      row.getCell(base.length + 1 + data.scans.length + i).numFmt = '0.0%'
+    })
+    if (r.proof !== 'confirmed') row.font = { italic: true, color: { argb: 'FF808080' } }
+  }
+  ws.columns = [{ width: 22 }, { width: 14 }, { width: 20 }, { width: 40 }, { width: 13 }, { width: 22 }, { width: 22 }, { width: 9 }, { width: 11 }, { width: 9 }, { width: 10 }, { width: 11 }, ...data.scans.map(() => ({ width: 16 })), ...data.scans.map(() => ({ width: 16 }))]
+  ws.views = [{ state: 'frozen', xSplit: 5, ySplit: 1 }]
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: head.length } }
+  const buffer = await wb.xlsx.writeBuffer()
+  downloadBlob(fileName, new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
 }

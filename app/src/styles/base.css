@@ -8,6 +8,18 @@ html {
   -webkit-text-size-adjust: 100%;
 }
 
+/* Ordinateurs portables (14 pouces) : l'interface est un peu moins grande. Les textes, espacements et le menu suivent le même rapport. */
+@media (max-width: 1700px) {
+  html {
+    font-size: 14.5px;
+  }
+}
+@media (max-width: 1400px) {
+  html {
+    font-size: 13.5px;
+  }
+}
+
 body {
   margin: 0;
   background: var(--paper);

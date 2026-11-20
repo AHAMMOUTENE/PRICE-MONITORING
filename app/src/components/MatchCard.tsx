@@ -10,7 +10,8 @@ import type { AccountProduct, CatalogItem, ReviewDecision } from '../types'
 /**
  * La question posée à l'utilisateur : « Est-ce le même produit ? »
  * À gauche, le produit tel que le revendeur le vend ; à droite, le produit VEJA que l'outil suggère.
- * Deux réponses claires, plus un moyen de désigner le bon produit si la suggestion est fausse.
+ * Deux réponses claires, plus un moyen de désigner le bon produit si la suggestion est fausse :
+ * le produit choisi dans la liste REMPLACE la suggestion dans la carte, et l'utilisateur valide ensuite (rien n'est enregistré au clic dans la liste).
  */
 export function MatchCard({
   a,
@@ -33,9 +34,16 @@ export function MatchCard({
   const { zone } = useZone()
   const p = a.proposal
   const [picking, setPicking] = useState(!p)
+  const [chosen, setChosen] = useState<CatalogItem | null>(null) // produit désigné par l'utilisateur, en remplacement de la suggestion
   const [q, setQ] = useState('')
   const [results, setResults] = useState<CatalogItem[]>([])
   const size = large ? 168 : 96
+
+  useEffect(() => {
+    setChosen(null)
+    setPicking(!a.proposal)
+    setQ('')
+  }, [a.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let alive = true
@@ -45,13 +53,17 @@ export function MatchCard({
     }
   }, [zone, q])
 
+  /** Valide le produit affiché à droite : celui que l'utilisateur a choisi, sinon la suggestion. */
+  const validate = () => (chosen ? onDecide({ kind: 'corrected', sku: chosen.sku }, t('review.corrected')) : onDecide({ kind: 'accepted' }, t('review.confirmed')))
+  const shown = chosen ?? p?.item
+
   useEffect(() => {
     if (!shortcuts) return
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return
       if (picking) return
-      if (e.key === 'y' || e.key === 'Y') onDecide({ kind: 'accepted' }, t('review.confirmed'))
+      if (e.key === 'y' || e.key === 'Y') validate()
       if (e.key === 'n' || e.key === 'N') setPicking(true)
       if (e.key === 'ArrowRight') onSkip?.()
     }
@@ -85,17 +97,17 @@ export function MatchCard({
         </div>
 
         <figure className="match-side is-suggested">
-          {p ? <ProductImage sku={p.item.sku} color={p.item.color} label={p.item.model} size={size} /> : <ProductImage color={a.color} label="?" size={size} />}
+          {shown ? <ProductImage src={shown.image} sku={shown.sku} color={shown.color} label={shown.model} size={size} /> : <ProductImage color={a.color} label="?" size={size} />}
           <figcaption>
-            <span className="k">{t('match.suggested')}</span>
-            {p ? (
+            <span className="k">{chosen ? t('match.chosen') : t('match.suggested')}</span>
+            {shown ? (
               <>
                 <b>
-                  {p.item.model} {p.item.color}
+                  {shown.model} {shown.color}
                 </b>
-                <span>{t('label.sku', { value: p.item.sku })}</span>
-                <span>{t('label.material', { value: p.item.material })}</span>
-                {p.item.rrp[a.currency] !== undefined && <span>{t('label.reference', { value: formatMoney(p.item.rrp[a.currency]!, a.currency) })}</span>}
+                <span>{t('label.sku', { value: shown.sku })}</span>
+                <span>{t('label.material', { value: shown.material })}</span>
+                {shown.rrp[a.currency] !== undefined && <span>{t('label.reference', { value: formatMoney(shown.rrp[a.currency]!, a.currency) })}</span>}
               </>
             ) : (
               <span className="muted">{t('review.noProposal')}</span>
@@ -106,12 +118,17 @@ export function MatchCard({
 
       {!picking ? (
         <div className="match-actions">
-          <button className="btn btn-primary" onClick={() => onDecide({ kind: 'accepted' }, t('review.confirmed'))}>
-            <Icon name="check" /> {t('match.yes')}
+          <button className="btn btn-primary" onClick={validate}>
+            <Icon name="check" /> {chosen ? t('match.validate') : t('match.yes')}
           </button>
           <button className="btn btn-secondary" onClick={() => setPicking(true)}>
-            {t('match.no')}
+            {chosen ? t('match.pickOther') : t('match.no')}
           </button>
+          {chosen && p && (
+            <button className="btn btn-ghost" onClick={() => setChosen(null)}>
+              {t('match.backToSuggestion')}
+            </button>
+          )}
           {onSkip && (
             <button className="btn btn-ghost" onClick={onSkip}>
               {t('match.skip')}
@@ -128,7 +145,15 @@ export function MatchCard({
           {results.length > 0 && (
             <div className="suggest" aria-live="polite">
               {results.map((c) => (
-                <button key={c.sku} onClick={() => onDecide({ kind: 'corrected', sku: c.sku }, t('review.corrected'))}>
+                <button
+                  key={c.sku}
+                  onClick={() => {
+                    // Le produit choisi remplace la suggestion ; il reste à valider.
+                    setChosen(c)
+                    setPicking(false)
+                    setQ('')
+                  }}
+                >
                   <ProductImage sku={c.sku} color={c.color} label={c.model} size={40} />
                   <span>
                     <b>
@@ -147,7 +172,7 @@ export function MatchCard({
             <button className="btn btn-secondary" onClick={() => onDecide({ kind: 'no-match' }, t('review.dismissed'))}>
               {t('match.none')}
             </button>
-            {p && (
+            {shown && (
               <button className="btn btn-ghost" onClick={() => setPicking(false)}>
                 {t('common.back')}
               </button>

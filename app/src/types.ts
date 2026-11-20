@@ -26,6 +26,8 @@ export interface Retailer {
 }
 
 export interface CatalogItem {
+  /** Image du produit, prise sur la fiche d'un retailer lors d'un scan. */
+  image?: string
   /** Les 9 premiers caractères de la référence VEJA : l'identifiant du produit. */
   sku: string
   /** Lettres qui suivent le SKU dans les références (A, B, C, D : femme, homme, enfant…), sans effet sur l'identité. */
@@ -129,8 +131,32 @@ export interface WeekOverview {
   retailersInAnomaly: number
   deltaConfirmed: number | null
   nextScan: string
+  /** Dernier scan terminé de la zone (date et heure, ISO) ; `running` : un scan est en cours. */
+  lastScan?: { at: string; status: string; running: boolean } | null
   currentSale: SalePeriod | null
   retailers: RetailerWeekRow[]
+}
+
+/** Un passage sur les sites d'une zone, pour l'historique des scans. */
+export interface ScanRecord {
+  id: string
+  trigger: 'manual' | 'scheduled'
+  status: 'queued' | 'running' | 'done' | 'partial' | 'failed' | 'cancelled'
+  createdAt: string
+  finishedAt: string | null
+  /** Pages de site prévues, traitées (réussies, en échec ou ignorées), en échec, ignorées. */
+  total: number
+  done: number
+  failed: number
+  skipped: number
+  /** Parmi les ignorées, celles qui avaient été visitées avec succès peu avant (scans d'avant la règle actuelle). */
+  skippedRecent: number
+  /** Fiches produits vues. */
+  seen: number
+  credits: number
+  cost: number | null
+  by: string
+  error: string | null
 }
 
 export type ReviewDecision =
@@ -143,6 +169,14 @@ export type ReviewDecision =
  * `weekly` : certains jours de la semaine (1 = lundi … 7 = dimanche). `daily` : tous les jours, coûteux.
  */
 export type ScanPlan = { mode: 'weekly'; days: number[] } | { mode: 'daily' }
+
+/** Rythme habituel des scans d'une zone, hors périodes de soldes : jours (1 = lundi … 7 = dimanche) et heure locale de la zone. */
+export interface ScanSchedule {
+  days: number[]
+  /** « HH:MM », heure locale de la zone ; elle vaut aussi pendant les périodes de soldes. */
+  time: string
+  timezone: string
+}
 
 export interface SalePeriod {
   id: string
@@ -191,6 +225,33 @@ export interface ExportData {
   fileName: string
 }
 
+/** Historique des prix pour l'export Excel : une ligne par fiche (retailer × produit), un prix par scan. */
+export interface HistoryRow {
+  retailer: string
+  segmentation: string
+  salesReps: string
+  /** Titre de la fiche chez le retailer. */
+  title: string
+  url: string
+  sku: string
+  model: string
+  color: string
+  season: string
+  proof: Proof
+  currency: string
+  rrp: number | null
+  allowedPct: number | null
+  /** Un prix par scan de `scans` ; null quand la fiche n'a pas été vue lors de ce scan. */
+  prices: (number | null)[]
+}
+
+export interface HistoryExport {
+  zone: Zone
+  /** Date et heure (ISO) de chaque scan ayant relevé des prix, du plus ancien au plus récent. */
+  scans: string[]
+  rows: HistoryRow[]
+}
+
 export type CsvDelimiter = ';' | ',' | '\t'
 
 export interface ImportOptions {
@@ -204,6 +265,18 @@ export interface ImportOptions {
   noDiscount?: boolean
   /** Correspondance choisie par l'utilisateur : donnée attendue → index de colonne du fichier (-1 : aucune). */
   mapping?: Record<string, number>
+}
+
+/** Import : « add » ajoute ce qui manque sans toucher à l'existant ; « update » remplace l'existant par les valeurs du fichier. Rien n'est jamais supprimé. */
+export type ImportMode = 'add' | 'update'
+
+export interface ImportResult {
+  /** Lignes du fichier absentes jusque-là, créées. */
+  added: number
+  /** Lignes déjà présentes complétées (mode « add ») ou remplacées (mode « update »). */
+  updated: number
+  /** Lignes déjà présentes, laissées telles quelles. */
+  unchanged: number
 }
 
 export interface ImportPreview {
@@ -225,6 +298,8 @@ export interface ImportPreview {
   mapping?: Record<string, number>
   fileName: string
   rows: number
+  /** Parmi ces lignes, celles qui existent déjà dans la zone (même nom de retailer, même SKU). */
+  existing?: number
   /** Colonnes du fichier reconnues, avec leur nom d'origine. */
   /** `label` remplace la traduction de `key` quand la colonne dépend des données (ex. « RRP GBP »). */
   recognized: { key: string; from: string; label?: string }[]
@@ -254,6 +329,12 @@ export interface ProductRow {
 }
 
 export interface ProductSeries {
+  /** Identifiant de la fiche chez le revendeur : un revendeur peut avoir plusieurs fiches pour un même produit. */
+  key: string
+  /** Titre de la fiche chez le revendeur, tel qu'il l'écrit. */
+  title: string
+  /** Indice de confiance de la proposition (fiches à vérifier seulement), de 0 à 1. */
+  confidence?: number
   retailerId: string
   retailerName: string
   /** Devise du site observé, et RRP du produit dans cette devise. */
@@ -276,7 +357,10 @@ export interface ProductDetail {
   /** Devises des sites où le produit est vendu, la plus fréquente d'abord. */
   currencies: Currency[]
   weeks: string[]
+  /** Fiches confirmées : seules elles comptent dans les prix et le graphe. */
   series: ProductSeries[]
+  /** Fiches qui ressemblent à ce produit sans que ce soit confirmé : à vérifier, jamais mélangées aux prix. */
+  candidates: ProductSeries[]
 }
 
 /* ───────── Vue globale (toutes zones, lecture seule) ───────── */
@@ -357,7 +441,22 @@ export interface AccountComment {
   mine: boolean
 }
 
-export type AlertKind = 'to-review' | 'recurrence' | 'site-missing'
+/**
+ * « review » et « recurrence » : un retailer à revoir (produits au-dessus de la remise autorisée, ou problème revenu) ; ce sont les alertes.
+ * « to-review » (produits à identifier) et « site-missing » (site à ajouter) sont des tâches : affichées sous « À faire », hors du compteur d'alertes.
+ */
+export type AlertKind = 'review' | 'recurrence' | 'to-review' | 'site-missing'
+
+/** Rubriques du récapitulatif envoyé par e-mail après un scan. */
+export type EmailKind = 'review' | 'recurrence' | 'todo'
+
+export interface EmailPrefs {
+  /** Recevoir un e-mail après chaque scan de cette zone. */
+  enabled: boolean
+  kinds: EmailKind[]
+  /** Faux tant que le service d'envoi n'est pas branché côté serveur : le choix est enregistré, rien ne part. */
+  configured: boolean
+}
 
 export interface Alert {
   id: string
@@ -370,6 +469,8 @@ export interface Alert {
   weeks: number
   /** Semaines sans anomalie avant le retour (récidive). */
   gapWeeks?: number
+  /** Remise la plus forte parmi les produits concernés, en %. */
+  maxDiscountPct?: number
 }
 
 /** Un produit suivi chez un compte, qu'il soit en anomalie ou non. */

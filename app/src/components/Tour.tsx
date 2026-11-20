@@ -37,6 +37,7 @@ const STEPS: Step[] = [
   { icon: 'globe', title: 'tour.zone.title', text: 'tour.zone.text', route: '/', target: 'zone' },
   { icon: 'store', title: 'tour.accounts.title', text: 'tour.accounts.text', route: '/reglages/comptes', target: 'import-accounts' },
   { icon: 'box', title: 'tour.catalog.title', text: 'tour.catalog.text', route: '/reglages/produits', target: 'import-catalog' },
+  { icon: 'download', title: 'tour.templates.title', text: 'tour.templates.text', route: '/reglages/produits?import=1', target: 'import-template' },
   { icon: 'edit', title: 'tour.catalogEdit.title', text: 'tour.catalogEdit.text', route: '/reglages/produits', target: 'catalog-table' },
   { icon: 'calendar', title: 'tour.calendar.title', text: 'tour.calendar.text', route: '/reglages/calendrier', target: 'calendar-form' },
   { icon: 'grid', title: 'tour.dashboard.title', text: 'tour.dashboard.text', route: '/', target: 'dash-top' },
@@ -79,7 +80,7 @@ export function Tour({ open, onClose }: { open: boolean; onClose: () => void }) 
   useEffect(() => {
     if (!open || !step.route) return
     let alive = true
-    const go = (to: string) => alive && path !== to && navigate(to)
+    const go = (to: string) => alive && window.location.hash.replace(/^#+/, '') !== to && navigate(to) // adresse complète : ferme aussi l'import ouvert par l'étape précédente
     if (typeof step.route === 'string') go(step.route)
     else step.route(zone).then(go)
     return () => {

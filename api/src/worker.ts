@@ -6,6 +6,7 @@
  */
 import { createApp } from './app.ts'
 import { postgresDb, type Db } from './db.ts'
+import { mailerFromEnv } from './mail.ts'
 import { extractorFromEnv } from './scrape/extract.ts'
 import { fetcherFromEnv } from './scrape/fetcher.ts'
 import { recoverStale, runQueued, tickScheduler, type ScanDeps } from './scrape/scan.ts'
@@ -30,7 +31,7 @@ function open(env: Bindings, connections = 1): { db: Db; deps: ScanDeps } {
   const vars = strings(env)
   // Une connexion par invocation : Hyperdrive les mutualise côté Cloudflare.
   const db = postgresDb(url, connections)
-  return { db, deps: { db, fetcher: fetcherFromEnv(vars), llm: extractorFromEnv(vars), env: vars, log } }
+  return { db, deps: { db, fetcher: fetcherFromEnv(vars), llm: extractorFromEnv(vars), mailer: mailerFromEnv(vars), env: vars, log } }
 }
 
 export default {

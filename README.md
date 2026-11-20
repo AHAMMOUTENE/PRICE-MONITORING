@@ -76,7 +76,10 @@ Ensuite, dans l'application : choisir une zone, importer le **catalogue** (fichi
 
 ## État du projet
 
-Fonctionnel : imports, comptes, catalogue, commentaires, calendrier, identification des produits, collecte et évaluation, SSO simulé, préférences par utilisateur, garde-fous.
-À décider avec l'infrastructure : hébergement (Cloudflare Workers payant ou Node), SSO d'entreprise (Cloudflare Access), droits par zone, clé ScrapingBee de production.
+Fonctionnel : imports (ajouter ce qui manque ou mettre à jour), retailers, catalogue par zone (ajout et modification dans un panneau), commentaires, calendrier des soldes et rythme habituel des scans, identification des produits, collecte par cran de coût avec lecture complétée par Claude, rapprochement par modèle et couleur, historique des scans et export Excel de l'historique des prix, filtre par saison, alertes « retailers à revoir », e-mail de récapitulatif après chaque scan (opt-in), SSO simulé en local, préférences par utilisateur, garde-fous de coût.
+
+À brancher ou à décider avec l'infrastructure : hébergement (Cloudflare Workers payant ou Node), SSO d'entreprise (Cloudflare Access), droits par zone, clé ScrapingBee de production, service d'envoi des e-mails (Resend, adresse d'expédition sur un domaine vérifié).
+
+Migrations de base à appliquer sur un projet Supabase existant : `supabase/migrations/`. Un projet neuf n'a besoin que de `supabase/schema.sql`.
 
 Usage interne VEJA.

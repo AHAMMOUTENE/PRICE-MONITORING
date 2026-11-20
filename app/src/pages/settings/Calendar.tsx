@@ -7,7 +7,7 @@ import { Card, Drawer, ErrorBlock, LoadingBlock, PageHeader } from '../../compon
 import { refresh, useQuery, useZone } from '../../lib/app'
 import { formatFullDate } from '../../lib/format'
 import { useT } from '../../lib/i18n'
-import type { SalePeriod, ScanEstimate, ScanPlan, Zone } from '../../types'
+import type { SalePeriod, ScanEstimate, ScanPlan, ScanSchedule, Zone } from '../../types'
 
 const DAYS = [1, 2, 3, 4, 5, 6, 7]
 /** Lundi et jeudi : deux scans par semaine, le rythme proposé par défaut pendant les soldes. */
@@ -134,9 +134,63 @@ function PeriodForm({ zone, initial, onDone }: { zone: Zone; initial?: SalePerio
 }
 
 /**
+ * Rythme habituel des scans (hors périodes de soldes) : jours de la semaine et heure de lancement.
+ * L'heure est celle de la zone et vaut aussi pendant les périodes de soldes.
+ */
+function ScheduleForm({ zone, initial, onDone }: { zone: Zone; initial: ScanSchedule; onDone: () => void }) {
+  const { t, locale } = useT()
+  const toast = useToast()
+  const [days, setDays] = useState<number[]>(initial.days)
+  const [time, setTime] = useState(initial.time)
+  const [busy, setBusy] = useState(false)
+  const toggleDay = (d: number) => setDays((cur) => (cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d].sort((a, b) => a - b)))
+  const valid = days.length > 0 && /^([01]\d|2[0-3]):[0-5]\d$/.test(time)
+  const save = async () => {
+    if (!valid || busy) return
+    setBusy(true)
+    try {
+      await api.saveScanSchedule(zone, { days, time })
+      refresh()
+      toast.show(t('sales.updated'))
+      onDone()
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <div className="field">
+        <span className="label">{t('calendar.defaultDays')}</span>
+        <div className="daypick" role="group" aria-label={t('calendar.defaultDays')}>
+          {DAYS.map((d) => (
+            <button key={d} type="button" aria-pressed={days.includes(d)} onClick={() => toggleDay(d)}>
+              {dayName(locale, d)}
+            </button>
+          ))}
+        </div>
+        {days.length === 0 && <span className="error-text">{t('sales.errDays')}</span>}
+      </div>
+      <div className="field">
+        <label htmlFor="sched-time">{t('calendar.time')}</label>
+        <input id="sched-time" className="input" type="time" style={{ width: 140 }} value={time} onChange={(e) => setTime(e.target.value)} />
+        <span className="small muted">{t('calendar.timeHint', { tz: initial.timezone })}</span>
+      </div>
+      <div className="row" style={{ marginTop: 16 }}>
+        <button className="btn btn-primary" onClick={save} disabled={!valid || busy}>
+          {t('common.save')}
+        </button>
+        <button className="btn btn-ghost" onClick={onDone}>
+          {t('common.cancel')}
+        </button>
+      </div>
+    </>
+  )
+}
+
+/**
  * Calendrier des soldes de la zone. Hors période, un scan a lieu chaque lundi ;
  * pour chaque période, l'équipe choisit les jours de scan, ou un scan quotidien (coûteux).
- * L'ajout se fait dans la page ; la modification s'ouvre dans un volet, sans quitter la liste.
+ * La liste des périodes est en haut ; l'ajout et la modification s'ouvrent dans un volet, sans quitter la page.
  */
 export function CalendarSettings() {
   const { t, locale } = useT()
@@ -144,9 +198,12 @@ export function CalendarSettings() {
   const toast = useToast()
   const list = useQuery(() => api.listSalePeriods(zone), [zone])
   const [editing, setEditing] = useState<SalePeriod | null>(null)
+  const [adding, setAdding] = useState(false)
+  const schedule = useQuery(() => api.getScanSchedule(zone), [zone])
+  const [editingSchedule, setEditingSchedule] = useState(false)
 
   if (list.error) return <div className="page"><ErrorBlock message={list.error} onRetry={refresh} /></div>
-  if (!list.data) return <div className="page"><LoadingBlock /></div>
+  if (!list.data || !schedule.data) return <div className="page"><LoadingBlock /></div>
 
   const remove = async (p: SalePeriod) => {
     await api.removeSalePeriod(p.id)
@@ -159,14 +216,19 @@ export function CalendarSettings() {
 
   return (
     <div className="page page-narrow">
-      <PageHeader title={t('calendar.title')} subtitle={`${t('calendar.subtitle')} ${t('calendar.default')}`} />
+      <PageHeader title={t('calendar.title')} subtitle={t('calendar.subtitle')} />
 
       <div className="stack">
-        <div data-tour="calendar-form">
-          <Card title={t('calendar.add')}>
-            <PeriodForm zone={zone} onDone={() => undefined} key={list.data.length} />
-          </Card>
-        </div>
+        <Card title={t('calendar.defaultTitle')}>
+          <div className="row" style={{ alignItems: 'center', gap: 8 }}>
+            <Icon name="clock" className="icon muted" />
+            <b>{t('calendar.defaultLine', { days: schedule.data.days.map((d) => dayName(locale, d)).join(' · '), time: schedule.data.time })}</b>
+            <span className="muted small">({schedule.data.timezone})</span>
+            <button className="iconbtn" onClick={() => setEditingSchedule(true)} aria-label={t('calendar.editDefault')} title={t('calendar.editDefault')}>
+              <Icon name="edit" />
+            </button>
+          </div>
+        </Card>
 
         <Card title={t('calendar.list')} flush>
           {list.data.length === 0 ? (
@@ -211,7 +273,25 @@ export function CalendarSettings() {
             </table>
           )}
         </Card>
+
+        <div>
+          <button className="btn btn-primary" data-tour="calendar-form" onClick={() => setAdding(true)}>
+            <Icon name="plus" /> {t('calendar.add')}
+          </button>
+        </div>
       </div>
+
+      {editingSchedule && (
+        <Drawer title={t('calendar.editDefault')} onClose={() => setEditingSchedule(false)}>
+          <ScheduleForm zone={zone} initial={schedule.data} onDone={() => setEditingSchedule(false)} />
+        </Drawer>
+      )}
+
+      {adding && (
+        <Drawer title={t('calendar.add')} onClose={() => setAdding(false)}>
+          <PeriodForm zone={zone} onDone={() => setAdding(false)} />
+        </Drawer>
+      )}
 
       {editing && (
         <Drawer title={t('calendar.edit', { name: editing.label })} onClose={() => setEditing(null)}>

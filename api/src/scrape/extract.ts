@@ -16,6 +16,8 @@ export interface RawListing {
   ean?: string
   inStock?: boolean
   brand?: string
+  /** Couleur annoncée par le revendeur, quand la page en présente plusieurs pour un même modèle. */
+  color?: string
 }
 
 /** « 1.299,90 », « 129,95 », « 129.95 », 129.95 → nombre. */
@@ -90,7 +92,48 @@ function fromProductNode(n: any, base: string): RawListing | null {
   if (!title || price === undefined) return null
   const brand = typeof n.brand === 'string' ? n.brand : str(n.brand?.name)
   const ean = [n.gtin13, n.gtin, n.gtin14, n.gtin12, n.gtin8].map(str).find((g) => g && /^\d{8,14}$/.test(g))
-  return { title, url, price, originalPrice: original, currency, image: imageOf(n.image, base), ref: str(n.sku) ?? str(n.mpn) ?? str(n.productID), ean, inStock, brand }
+  return { title, url, price, originalPrice: original, currency, image: imageOf(n.image, base), ref: str(n.sku) ?? str(n.mpn) ?? str(n.productID), ean, inStock, brand, color: str(n.color) }
+}
+
+/**
+ * Un produit, ou un modèle présenté en plusieurs couleurs (ProductGroup) : chaque couleur est une fiche à part,
+ * avec son adresse, son prix et sa référence. Les variantes d'une même couleur (les pointures) restent une seule fiche.
+ */
+function fromProductNodes(n: any, base: string): RawListing[] {
+  const own = fromProductNode(n, base)
+  const variants = asArray<any>(n.hasVariant)
+  if (!variants.length) return own ? [own] : []
+  const byColor = new Map<string, any[]>()
+  for (const v of variants) {
+    const key = str(v.color) ?? str(v.url) ?? str(v['@id']) ?? ''
+    byColor.set(key, [...(byColor.get(key) ?? []), v])
+  }
+  if (byColor.size < 2) return own ? [own] : []
+  const out: RawListing[] = []
+  for (const vs of byColor.values()) {
+    const priced = vs.map((v) => ({ v, p: pricesOf(v.offers) })).filter((x) => x.p.price !== undefined)
+    if (!priced.length) continue
+    const best = priced.reduce((a, b) => (b.p.price! < a.p.price! ? b : a))
+    const v = best.v
+    const color = str(v.color)
+    const name = str(n.name) ?? str(v.name)
+    if (!name) continue
+    const ean = [v.gtin13, v.gtin, v.gtin14, v.gtin12, v.gtin8].map(str).find((g) => g && /^\d{8,14}$/.test(g))
+    out.push({
+      title: color && !name.toLowerCase().includes(color.toLowerCase()) ? `${name} ${color}` : name,
+      url: absolute(str(v.url) ?? str(v['@id']) ?? str(n.url), base) ?? base,
+      price: best.p.price!,
+      originalPrice: best.p.original,
+      currency: best.p.currency,
+      image: imageOf(v.image ?? n.image, base),
+      ref: str(v.sku) ?? str(v.mpn) ?? str(n.sku),
+      ean,
+      inStock: best.p.inStock,
+      brand: typeof n.brand === 'string' ? n.brand : str(n.brand?.name),
+      color,
+    })
+  }
+  return out
 }
 
 /** Parcourt un nœud JSON-LD (tableau, @graph, ItemList…) et collecte les produits avec prix. */
@@ -99,8 +142,7 @@ function walk(node: any, base: string, out: RawListing[], depth = 0): void {
   if (Array.isArray(node)) return node.forEach((n) => walk(n, base, out, depth + 1))
   const types = typeOf(node)
   if (types.includes('Product') || types.includes('ProductGroup')) {
-    const l = fromProductNode(node, base)
-    if (l) out.push(l)
+    out.push(...fromProductNodes(node, base))
     return
   }
   if (types.includes('ListItem') && node.item) return walk(node.item, base, out, depth + 1)
@@ -159,6 +201,25 @@ export function extractShopify(json: string, origin: string): RawListing[] {
     })
   }
   return out
+}
+
+/** Nombre de prix écrits dans la page : un produit en affiche un ou deux (prix barré). Sert à repérer une extraction trop pauvre. */
+export function priceMentions(html: string): number {
+  const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ')
+  return (text.match(/\d[\d.,\s]{0,8}\s?(?:€|EUR|£|GBP|CHF|kr|zł|Kč|Ft|lei|R\$|\$)|(?:€|£|\$|R\$|CHF)\s?\d/g) ?? []).length
+}
+
+/** Boutique Shopify : le nom de la boutique est écrit dans la page. (Les ressources cdn.shopify.com seules ne prouvent rien.) */
+export function isShopifyPage(html: string): boolean {
+  return /Shopify\.shop\s*=\s*["'][^"']+\.myshopify\.com/i.test(html) || /<meta[^>]+name=["']shopify-checkout-api-token["']/i.test(html)
+}
+
+/** Réunit deux lectures d'une même page sans doublon (même fiche = même adresse et même couleur, sinon même titre et même prix). */
+export function mergeListings(a: RawListing[], b: RawListing[]): RawListing[] {
+  const key = (l: RawListing) => `${l.url.split('#')[0]}|${l.color ?? ''}|${l.url === '' ? l.title : ''}`
+  const seen = new Set(a.map(key))
+  const sameCard = (x: RawListing) => a.some((y) => y.title === x.title && y.price === x.price)
+  return a.concat(b.filter((x) => !seen.has(key(x)) && !sameCard(x)))
 }
 
 /** Adresse de la page suivante d'une liste (lien rel="next"), le cas échéant. */
@@ -220,6 +281,7 @@ export class ClaudeExtractor implements LlmExtractor {
                       originalPrice: { type: 'number', description: 'Prix barré, seulement s’il y en a un' },
                       image: { type: 'string' },
                       ref: { type: 'string', description: 'Référence ou SKU affiché, s’il y en a une' },
+                      color: { type: 'string', description: 'Couleur du produit telle qu’écrite dans la page, si elle y est' },
                     },
                     required: ['title', 'price'],
                   },
@@ -230,7 +292,7 @@ export class ClaudeExtractor implements LlmExtractor {
           },
         ],
         tool_choice: { type: 'tool', name: 'report_products' },
-        messages: [{ role: 'user', content: `Page : ${pageUrl}\nListe les produits de la marque VEJA (chaussures, sacs, accessoires) avec leur prix affiché. Ignore les autres marques.\n\n${cleanHtml(html)}` }],
+        messages: [{ role: 'user', content: `Page : ${pageUrl}\nListe TOUS les produits de la marque VEJA de la page (chaussures, sacs, accessoires), un par carte produit, avec leur prix affiché. Si un même modèle apparaît en plusieurs couleurs, renvoie une entrée par couleur, avec la couleur et l’adresse propre à cette couleur. Ignore les autres marques.\n\n${cleanHtml(html)}` }],
       }),
     })
     if (!res.ok) throw new Error(`Claude ${res.status}`)
@@ -241,7 +303,8 @@ export class ClaudeExtractor implements LlmExtractor {
       const price = parsePrice(p.price)
       if (!p.title || price === null) continue
       const original = parsePrice(p.originalPrice)
-      listings.push({ title: String(p.title), url: absolute(str(p.url), pageUrl) ?? pageUrl, price, originalPrice: original !== null && original > price ? original : undefined, image: absolute(str(p.image), pageUrl), ref: str(p.ref) })
+      const slug = String(p.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 80)
+      listings.push({ title: String(p.title), url: absolute(str(p.url), pageUrl) ?? `${pageUrl}#${slug}`, price, originalPrice: original !== null && original > price ? original : undefined, image: absolute(str(p.image), pageUrl), ref: str(p.ref), color: str(p.color) })
     }
     const costUsd = ((data.usage?.input_tokens ?? 0) * this.priceInPerM + (data.usage?.output_tokens ?? 0) * this.priceOutPerM) / 1_000_000
     return { listings, costUsd }
