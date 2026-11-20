@@ -44,7 +44,7 @@ export const fr = {
   'dash.toHandle': 'Retailers à traiter',
   'dash.noAnomaly': 'Aucune anomalie cette semaine.',
   'kpi.anomalies': 'Produits en anomalie',
-  'kpi.accounts': 'Retailers concernés',
+  'kpi.accounts': 'Retailers en discount',
   'kpi.toReview': 'Produits à identifier',
   'kpi.outOf': 'sur {total} retailers suivis',
   'kpi.vsPrev': '{delta} vs semaine précédente',

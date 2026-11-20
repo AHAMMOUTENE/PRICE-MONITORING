@@ -45,7 +45,7 @@ export const en: Record<Key, string> = {
   'dash.toHandle': 'Retailers to handle',
   'dash.noAnomaly': 'No anomaly this week.',
   'kpi.anomalies': 'Products in anomaly',
-  'kpi.accounts': 'Retailers concerned',
+  'kpi.accounts': 'Retailers discounting',
   'kpi.toReview': 'Products to identify',
   'kpi.outOf': 'out of {total} tracked retailers',
   'kpi.vsPrev': '{delta} vs previous week',

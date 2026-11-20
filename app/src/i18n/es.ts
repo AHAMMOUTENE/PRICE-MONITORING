@@ -45,7 +45,7 @@ export const es: Record<Key, string> = {
   'dash.toHandle': 'Minoristas por atender',
   'dash.noAnomaly': 'Ninguna anomalía esta semana.',
   'kpi.anomalies': 'Productos en anomalía',
-  'kpi.accounts': 'Distribuidores afectados',
+  'kpi.accounts': 'Minoristas con descuento',
   'kpi.toReview': 'Productos por identificar',
   'kpi.outOf': 'de {total} minoristas seguidos',
   'kpi.vsPrev': '{delta} vs semana anterior',

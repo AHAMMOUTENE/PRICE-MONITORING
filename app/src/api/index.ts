@@ -439,7 +439,7 @@ export const mockApi: Api = {
       isCurrent: idx === WEEKS.length - 1,
       confirmed,
       toReview: anomalies.length - confirmed,
-      retailersInAnomaly: rows.filter((r) => r.confirmed > 0).length,
+      retailersInAnomaly: rows.filter((r) => r.status === 'anomaly').length,
       deltaConfirmed: previous ? confirmed - previous.filter((a) => a.proof === 'confirmed').length : null,
       nextScan: nextScanDate(zone),
       lastScan: lastScans.get(zone) ?? null,

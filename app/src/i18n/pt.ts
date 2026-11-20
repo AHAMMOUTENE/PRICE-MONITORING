@@ -45,7 +45,7 @@ export const pt: Record<Key, string> = {
   'dash.toHandle': 'Revendedores a tratar',
   'dash.noAnomaly': 'Nenhuma infração nesta semana.',
   'kpi.anomalies': 'Infrações',
-  'kpi.accounts': 'Revendedores com infração',
+  'kpi.accounts': 'Revendedores com desconto',
   'kpi.toReview': 'Produtos pendentes',
   'kpi.outOf': 'de {total} revendedores monitorados',
   'kpi.vsPrev': '{delta} vs semana anterior',

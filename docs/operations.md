@@ -41,7 +41,7 @@ Quand un garde-fou joue, les pages restantes sont marquées « ignoré » avec l
 
 ## E-mail de récapitulatif après chaque scan
 
-Chaque utilisateur peut l'activer **zone par zone** en haut de la page Notifications (désactivé par défaut) et choisir ses rubriques d'actions : retailers à revoir, toujours à corriger depuis le scan précédent, à faire (produits à identifier, retailers sans site). L'e-mail commence par les **indicateurs** du tableau de bord (produits en anomalie et écart avec le scan précédent, nouvelles anomalies, produits à identifier, retailers concernés sur le total suivi), puis liste les **actions à mener**, avec un lien vers chaque retailer et vers l'application, dans la langue de l'utilisateur. Les indicateurs sont toujours présents ; seules les rubriques d'actions se choisissent. Rien n'est envoyé après un scan en échec total, ni à quelqu'un qui ne l'a pas activé.
+Chaque utilisateur peut l'activer **zone par zone** en haut de la page Notifications (désactivé par défaut) et choisir ses rubriques d'actions : retailers à revoir, toujours à corriger depuis le scan précédent, à faire (produits à identifier, retailers sans site). L'e-mail commence par les **indicateurs** du tableau de bord (produits en anomalie et écart avec le scan précédent, nouvelles anomalies, produits à identifier, retailers en discount sur le total suivi), puis liste les **actions à mener**, avec un lien vers chaque retailer et vers l'application, dans la langue de l'utilisateur. Les indicateurs sont toujours présents ; seules les rubriques d'actions se choisissent. Rien n'est envoyé après un scan en échec total, ni à quelqu'un qui ne l'a pas activé.
 
 Pour que les e-mails partent, trois variables dans `api/.env` (ou les secrets Cloudflare) :
 

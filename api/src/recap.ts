@@ -1,7 +1,7 @@
 /**
  * Récapitulatif envoyé par e-mail après chaque scan, aux seules personnes qui l'ont activé (opt-in, par zone).
  * Il commence par les indicateurs du tableau de bord (produits en anomalie, nouvelles anomalies, produits à identifier,
- * retailers concernés), puis liste les actions à mener : retailers à revoir, retailers toujours à corriger depuis le scan
+ * retailers en discount), puis liste les actions à mener : retailers à revoir, retailers toujours à corriger depuis le scan
  * précédent, et ce qui reste à faire (produits à identifier, retailers sans site). Chaque lien renvoie vers l'application.
  * Chaque personne choisit les rubriques d'actions qu'elle veut recevoir ; les indicateurs sont toujours présents.
  */
@@ -53,6 +53,14 @@ export async function buildRecap(q: Sql, zone: string, scanId: string): Promise<
   const totals = async (id: string) => (await q.query<{ n: number; r: number }>(`select count(distinct o.listing_id)::int as n, count(distinct o.account_id)::int as r ${anomalyJoin}`, [id]))[0]
   const review = await byRetailer(scanId)
   const now = await totals(scanId)
+  // « Retailers en discount » : comme sur le tableau de bord, tout retailer qui a un produit au-dessus de la règle, confirmé ou non.
+  const [anyRetailers] = await q.query<{ r: number }>(
+    `select count(distinct o.account_id)::int as r from observations o
+       join observation_evaluations e on e.observation_id = o.id and e.is_current
+       join accounts a on a.id = o.account_id
+       where o.scan_id = $1 and e.evaluation = 'anomaly' and not a.excluded and a.status = 'active' and a.tracked`,
+    [scanId],
+  )
 
   // Scan précédent de la zone (celui qui a relevé des prix) : sert aux écarts et à « toujours à corriger ».
   const [prev] = await q.query<{ id: string }>(
@@ -93,7 +101,7 @@ export async function buildRecap(q: Sql, zone: string, scanId: string): Promise<
     pages: scan?.pages ?? 0,
     failed: scan?.failed ?? 0,
     seen: scan?.seen ?? 0,
-    kpis: { anomalies: now.n, deltaAnomalies, fresh, toIdentify: ti?.n ?? 0, retailersInAnomaly: now.r, retailersTracked: tracked?.n ?? 0 },
+    kpis: { anomalies: now.n, deltaAnomalies, fresh, toIdentify: ti?.n ?? 0, retailersInAnomaly: anyRetailers?.r ?? 0, retailersTracked: tracked?.n ?? 0 },
     review,
     recurrence,
     noSite: ns?.n ?? 0,
@@ -110,7 +118,7 @@ const T: Record<Lang, Record<string, string>> = {
     kAnomalies: 'Produits en anomalie',
     kNew: 'Nouvelles anomalies',
     kIdentify: 'Produits à identifier',
-    kRetailers: 'Retailers concernés',
+    kRetailers: 'Retailers en discount',
     kOutOf: 'sur {total} suivis',
     kDelta: '{d} depuis le scan précédent',
     kFirst: 'premier scan',
@@ -134,7 +142,7 @@ const T: Record<Lang, Record<string, string>> = {
     kAnomalies: 'Products in anomaly',
     kNew: 'New anomalies',
     kIdentify: 'Products to identify',
-    kRetailers: 'Retailers concerned',
+    kRetailers: 'Retailers discounting',
     kOutOf: 'out of {total} tracked',
     kDelta: '{d} since the previous scan',
     kFirst: 'first scan',
@@ -158,7 +166,7 @@ const T: Record<Lang, Record<string, string>> = {
     kAnomalies: 'Produtos em infração',
     kNew: 'Novas infrações',
     kIdentify: 'Produtos a identificar',
-    kRetailers: 'Revendedores envolvidos',
+    kRetailers: 'Revendedores com desconto',
     kOutOf: 'de {total} monitorados',
     kDelta: '{d} desde a varredura anterior',
     kFirst: 'primeira varredura',
@@ -182,7 +190,7 @@ const T: Record<Lang, Record<string, string>> = {
     kAnomalies: 'Productos en anomalía',
     kNew: 'Nuevas anomalías',
     kIdentify: 'Productos por identificar',
-    kRetailers: 'Minoristas afectados',
+    kRetailers: 'Minoristas con descuento',
     kOutOf: 'de {total} seguidos',
     kDelta: '{d} desde el escaneo anterior',
     kFirst: 'primer escaneo',

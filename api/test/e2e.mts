@@ -135,7 +135,7 @@ const mail = sent[0]
 ok('e-mail : un seul message, à l abonné, dans sa langue, avec la liste et le lien vers l application', sent.length === 1 && mail.to === 'sub@example.com' && /EMEA/.test(mail.subject) && mail.html.includes('https://prices.example.com/#/comptes/') && /Shop A/.test(mail.html) && /à revoir/i.test(mail.subject) && mail.html.includes('/#/notifications') && /À faire/.test(mail.text), JSON.stringify([sent.length, mail?.to, mail?.subject]))
 ok('e-mail : produits à identifier dans « à faire »', /1 produit\(s\) à identifier/.test(mail.text), mail.text.slice(0, 400))
 const iK = mail.text.indexOf('Produits en anomalie: 1'), iA = mail.text.indexOf('Actions à mener'), iR = mail.text.indexOf('Retailers à revoir')
-ok('e-mail : les indicateurs d abord, puis les actions à mener', iK > 0 && iK < iA && iA < iR && /Nouvelles anomalies: 0/.test(mail.text) && /Produits à identifier: 1/.test(mail.text) && /Retailers concernés: 1 \(sur 2 suivis\)/.test(mail.text) && mail.html.includes('Produits en anomalie') && mail.html.indexOf('Produits en anomalie') < mail.html.indexOf('Actions à mener'), mail.text.slice(0, 520))
+ok('e-mail : les indicateurs d abord, puis les actions à mener', iK > 0 && iK < iA && iA < iR && /Nouvelles anomalies: 0/.test(mail.text) && /Produits à identifier: 1/.test(mail.text) && /Retailers en discount: 1 \(sur 2 suivis\)/.test(mail.text) && mail.html.includes('Produits en anomalie') && mail.html.indexOf('Produits en anomalie') < mail.html.indexOf('Actions à mener'), mail.text.slice(0, 520))
 await call('PUT', '/api/zones/EMEA/email', { kinds: ['review'] }, sub)
 sent.length = 0
 const kindsScan = await mailApp.request('/api/zones/EMEA/scans', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
